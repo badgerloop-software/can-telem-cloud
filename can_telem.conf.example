@@ -1,0 +1,21 @@
+# Copy to can_telem.conf and adjust paths. Lines starting with # are comments.
+# Keys are case-insensitive. CLI flags (-i, -f, -o) override these values.
+
+output_dir = /var/tmp/can_telem_logs
+format_file = ./format.json
+can_interface = can0
+
+# --- Optional: InfluxDB Cloud (HTTPS write API v2) ---
+# CSV logs are still written on every decoded CAN update.
+# Influx uploads run at influx_upload_interval_ms: non-bool fields use the
+# arithmetic mean over the window; bool fields use logical OR (true if any
+# sample in the window was true).
+#
+# influx_enabled = true
+# influx_url = https://us-east-1-1.aws.cloud2.influxdata.com
+# influx_org = your-org
+# influx_bucket = your-bucket
+# influx_token = paste-token-here
+# Or omit influx_token and run: export INFLUX_TOKEN=...
+# influx_upload_interval_ms = 1000
+# influx_measurement = can_telem

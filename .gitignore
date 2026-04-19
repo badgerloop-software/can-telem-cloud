@@ -1,0 +1,11 @@
+# Built binary
+can_telem
+
+# Local logs and secrets (keep can_telem.conf.example in repo)
+logs/
+can_telem.conf
+
+# Editor / OS
+*.swp
+*~
+.DS_Store
