@@ -234,7 +234,6 @@ static void *watcher_thread(void *arg) {
                             if (send_signal(ctx, st, value) == 0) {
                                 st->retry_after_ns = 0;
                             } else {
-                                st->last_tx_ns = now;
                                 st->retry_after_ns = now + fail_backoff_ns;
                             }
                         }
@@ -261,7 +260,6 @@ static uint8_t compute_dlc_for_signal(const signal_def_t *sig) {
         return dlc == 0 ? 1 : dlc;
     }
     uint16_t end_byte = (uint16_t)(sig->bit_offset / 8u + sig->num_bytes);
-    if (end_byte == 0) end_byte = 1;
     return (uint8_t)end_byte;
 }
 

@@ -65,7 +65,7 @@ int encoder_insert(const signal_def_t *sig,
             return 0;
         }
         case T_INT32: {
-            if (value < -2147483648.0 || value > 2147483647.0) return -1;
+            if (value < (double)INT32_MIN || value > (double)INT32_MAX) return -1;
             int32_t v = (int32_t)llround(value);
             memcpy(p, &v, 4);
             return 0;
