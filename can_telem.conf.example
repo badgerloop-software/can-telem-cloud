@@ -25,7 +25,7 @@ can_interface = can0
 # signals marked with source="db" in format.json.
 #
 # db_enabled = true
-# db_path = /var/tmp/can_telem.db
+# db_path = /var/lib/can_telem/can_telem.db
 # db_table = signal_values
 # db_key_column = signal_key
 # db_value_column = signal_value

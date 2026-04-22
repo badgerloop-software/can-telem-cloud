@@ -36,6 +36,7 @@ struct db_sig_state {
     double last_value;
     bool has_last;
     uint64_t last_tx_ns;
+    uint64_t retry_after_ns;
 };
 
 struct db_frame_cache {

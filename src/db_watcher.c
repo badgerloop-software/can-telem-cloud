@@ -228,8 +228,15 @@ static void *watcher_thread(void *arg) {
                     } else if (!values_equal(st->last_value, value)) {
                         uint64_t now = monotonic_ns();
                         uint64_t min_ns = (uint64_t)st->sig->tx_min_interval_ms * 1000000ull;
-                        if (now - st->last_tx_ns >= min_ns) {
-                            (void)send_signal(ctx, st, value);
+                        uint64_t fail_backoff_ns = (uint64_t)(ctx->poll_interval_ms > 100
+                            ? ctx->poll_interval_ms : 100u) * 1000000ull;
+                        if (now >= st->retry_after_ns && now - st->last_tx_ns >= min_ns) {
+                            if (send_signal(ctx, st, value) == 0) {
+                                st->retry_after_ns = 0;
+                            } else {
+                                st->last_tx_ns = now;
+                                st->retry_after_ns = now + fail_backoff_ns;
+                            }
                         }
                         st->last_value = value;
                     }

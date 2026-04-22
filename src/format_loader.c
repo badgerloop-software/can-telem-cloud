@@ -210,7 +210,7 @@ int signal_table_load(const char *path, signal_table_t *table) {
                         name);
                 continue;
             }
-            sig.tx_min_interval_ms = (uint32_t)c_tx_min_ms->valueint;
+            sig.tx_min_interval_ms = (uint32_t)c_tx_min_ms->valuedouble;
         }
         if (sig.source == SIG_SOURCE_DB) {
             sig.tx_on_change = true;
