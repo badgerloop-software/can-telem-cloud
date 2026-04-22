@@ -9,6 +9,7 @@
 #define INFLUX_BUCKET_MAX      256
 #define INFLUX_TOKEN_MAX       2048
 #define INFLUX_MEASUREMENT_MAX 128
+#define DB_IDENTIFIER_MAX      64
 
 typedef struct {
     char output_dir[CONFIG_VALUE_MAX];
@@ -32,6 +33,21 @@ typedef struct {
     bool has_influx_upload_interval_ms;
     char influx_measurement[INFLUX_MEASUREMENT_MAX];
     bool has_influx_measurement;
+
+    bool db_enabled;
+    bool has_db_enabled;
+    char db_path[CONFIG_VALUE_MAX];
+    bool has_db_path;
+    char db_table[DB_IDENTIFIER_MAX];
+    bool has_db_table;
+    char db_key_column[DB_IDENTIFIER_MAX];
+    bool has_db_key_column;
+    char db_value_column[DB_IDENTIFIER_MAX];
+    bool has_db_value_column;
+    uint32_t db_poll_interval_ms;
+    bool has_db_poll_interval_ms;
+    char db_can_interface[CONFIG_VALUE_MAX];
+    bool has_db_can_interface;
 } config_file_t;
 
 /*
@@ -50,6 +66,13 @@ typedef struct {
  *   influx_token               — API token (optional; INFLUX_TOKEN env if empty)
  *   influx_upload_interval_ms  — cloud flush period (default 1000)
  *   influx_measurement         — line-protocol measurement name [A-Za-z0-9_]+
+ *   db_enabled                 — true/false (default false)
+ *   db_path                    — sqlite3 file path for DB sourced signals
+ *   db_table                   — table containing signal rows (default signal_values)
+ *   db_key_column              — key/name column (default signal_key)
+ *   db_value_column            — value column (default signal_value)
+ *   db_poll_interval_ms        — DB polling period in ms (default 200)
+ *   db_can_interface           — CAN interface for TX (default can_interface)
  *
  * Returns 0 on success, -1 on failure (missing file when path was
  * required, or I/O error). Errors are printed to stderr.

@@ -19,3 +19,15 @@ can_interface = can0
 # Or omit influx_token and run: export INFLUX_TOKEN=...
 # influx_upload_interval_ms = 1000
 # influx_measurement = can_telem
+
+# --- Optional: DB-driven CAN transmit (SQLite) ---
+# Enable this to poll values from a SQLite DB and transmit updates on CAN for
+# signals marked with source="db" in format.json.
+#
+# db_enabled = true
+# db_path = /var/lib/can_telem/can_telem.db
+# db_table = signal_values
+# db_key_column = signal_key
+# db_value_column = signal_value
+# db_poll_interval_ms = 200
+# db_can_interface = can0

@@ -9,6 +9,7 @@
 
 #include "can_reader.h"
 #include "config.h"
+#include "db_watcher.h"
 #include "format_loader.h"
 #include "influx.h"
 #include "writer.h"
@@ -127,6 +128,17 @@ int main(int argc, char **argv) {
     fprintf(stderr, "can_telem: listening on %s, writing to %s/\n",
             iface, outdir);
 
+    db_watcher_t dbw;
+    memset(&dbw, 0, sizeof dbw);
+    int db_rc = db_watcher_start(&dbw, &cf, &table, iface, &g_running);
+    if (db_rc < 0) {
+        close(fd);
+        influx_shutdown(&influx);
+        writer_close(&w);
+        signal_table_free(&table);
+        return 1;
+    }
+
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_signal;
@@ -137,6 +149,7 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "can_telem: shutting down\n");
     close(fd);
+    db_watcher_stop(&dbw);
     influx_shutdown(&influx);
     writer_close(&w);
     signal_table_free(&table);

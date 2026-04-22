@@ -8,6 +8,7 @@
 #define SIG_NAME_MAX      64
 #define SIG_UNITS_MAX     16
 #define SIG_CATEGORY_MAX  48
+#define SIG_DB_KEY_MAX    96
 #define SIG_TABLE_BUCKETS 1024
 
 typedef enum {
@@ -20,6 +21,11 @@ typedef enum {
     T_FLOAT,
 } sig_type_t;
 
+typedef enum {
+    SIG_SOURCE_CAN = 0,
+    SIG_SOURCE_DB  = 1,
+} sig_source_t;
+
 typedef struct {
     char       name[SIG_NAME_MAX];
     uint8_t    num_bytes;
@@ -31,6 +37,10 @@ typedef struct {
     uint32_t   can_id;
     uint16_t   bit_offset;
     bool       placeholder;
+    sig_source_t source;
+    char       db_key[SIG_DB_KEY_MAX];
+    bool       tx_on_change;
+    uint32_t   tx_min_interval_ms;
 } signal_def_t;
 
 typedef struct sig_node {

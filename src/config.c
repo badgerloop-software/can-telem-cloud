@@ -129,6 +129,74 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         out->has_influx_measurement = true;
         return 0;
     }
+    if (strcasecmp(key, "db_enabled") == 0) {
+        bool b;
+        if (parse_bool(val, &b) != 0) {
+            fprintf(stderr, "config: db_enabled: expected boolean\n");
+            return -1;
+        }
+        out->db_enabled = b;
+        out->has_db_enabled = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_path") == 0) {
+        if (strlen(val) >= sizeof out->db_path) {
+            fprintf(stderr, "config: db_path value too long\n");
+            return -1;
+        }
+        strcpy(out->db_path, val);
+        out->has_db_path = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_table") == 0) {
+        if (strlen(val) >= sizeof out->db_table) {
+            fprintf(stderr, "config: db_table value too long\n");
+            return -1;
+        }
+        strcpy(out->db_table, val);
+        out->has_db_table = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_key_column") == 0) {
+        if (strlen(val) >= sizeof out->db_key_column) {
+            fprintf(stderr, "config: db_key_column value too long\n");
+            return -1;
+        }
+        strcpy(out->db_key_column, val);
+        out->has_db_key_column = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_value_column") == 0) {
+        if (strlen(val) >= sizeof out->db_value_column) {
+            fprintf(stderr, "config: db_value_column value too long\n");
+            return -1;
+        }
+        strcpy(out->db_value_column, val);
+        out->has_db_value_column = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_poll_interval_ms") == 0) {
+        errno = 0;
+        char *end = NULL;
+        unsigned long v = strtoul(val, &end, 10);
+        if (errno != 0 || end == val || *end != '\0' || v > 60000UL) {
+            fprintf(stderr,
+                    "config: db_poll_interval_ms: invalid (use 1..60000 ms)\n");
+            return -1;
+        }
+        out->db_poll_interval_ms = (uint32_t)v;
+        out->has_db_poll_interval_ms = true;
+        return 0;
+    }
+    if (strcasecmp(key, "db_can_interface") == 0) {
+        if (strlen(val) >= sizeof out->db_can_interface) {
+            fprintf(stderr, "config: db_can_interface value too long\n");
+            return -1;
+        }
+        strcpy(out->db_can_interface, val);
+        out->has_db_can_interface = true;
+        return 0;
+    }
     fprintf(stderr, "config: unknown key '%s' (ignored)\n", key);
     return 0;
 }
