@@ -31,6 +31,18 @@ static int parse_type(const char *s, sig_type_t *out) {
     return -1;
 }
 
+static int parse_source(const char *s, sig_source_t *out) {
+    if (strcasecmp(s, "can") == 0) {
+        *out = SIG_SOURCE_CAN;
+        return 0;
+    }
+    if (strcasecmp(s, "db") == 0) {
+        *out = SIG_SOURCE_DB;
+        return 0;
+    }
+    return -1;
+}
+
 static void safe_copy(char *dst, size_t dst_sz, const char *src) {
     if (dst_sz == 0) return;
     size_t n = strlen(src);
@@ -95,8 +107,9 @@ int signal_table_load(const char *path, signal_table_t *table) {
     for (cJSON *item = root->child; item != NULL; item = item->next) {
         const char *name = item->string;
         if (!name) continue;
-        if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != 8) {
-            fprintf(stderr, "format_loader: skipping %s: expected 8-element array\n",
+        int arr_sz = cJSON_GetArraySize(item);
+        if (!cJSON_IsArray(item) || arr_sz < 8 || arr_sz > 12) {
+            fprintf(stderr, "format_loader: skipping %s: expected 8..12-element array\n",
                     name);
             continue;
         }
@@ -108,6 +121,10 @@ int signal_table_load(const char *path, signal_table_t *table) {
         cJSON *c_category  = cJSON_GetArrayItem(item, 5);
         cJSON *c_canid     = cJSON_GetArrayItem(item, 6);
         cJSON *c_bitoff    = cJSON_GetArrayItem(item, 7);
+        cJSON *c_source    = arr_sz > 8  ? cJSON_GetArrayItem(item, 8)  : NULL;
+        cJSON *c_db_key    = arr_sz > 9  ? cJSON_GetArrayItem(item, 9)  : NULL;
+        cJSON *c_tx_mode   = arr_sz > 10 ? cJSON_GetArrayItem(item, 10) : NULL;
+        cJSON *c_tx_min_ms = arr_sz > 11 ? cJSON_GetArrayItem(item, 11) : NULL;
 
         if (!cJSON_IsNumber(c_nbytes) ||
             !cJSON_IsString(c_type) ||
@@ -156,6 +173,52 @@ int signal_table_load(const char *path, signal_table_t *table) {
         sig.can_id     = (uint32_t)id;
         sig.bit_offset = (uint16_t)c_bitoff->valueint;
         sig.placeholder = (strcasecmp(hex, "FFF") == 0);
+        sig.source = SIG_SOURCE_CAN;
+        sig.tx_on_change = false;
+        sig.tx_min_interval_ms = 0;
+        safe_copy(sig.db_key, sizeof sig.db_key, name);
+
+        if (c_source) {
+            if (!cJSON_IsString(c_source) ||
+                parse_source(c_source->valuestring, &sig.source) != 0) {
+                fprintf(stderr, "format_loader: skipping %s: bad source\n", name);
+                continue;
+            }
+        }
+        if (c_db_key) {
+            if (!cJSON_IsString(c_db_key)) {
+                fprintf(stderr, "format_loader: skipping %s: db_key must be string\n",
+                        name);
+                continue;
+            }
+            safe_copy(sig.db_key, sizeof sig.db_key, c_db_key->valuestring);
+        }
+        if (c_tx_mode) {
+            if (!cJSON_IsString(c_tx_mode) ||
+                strcasecmp(c_tx_mode->valuestring, "on_change") != 0) {
+                fprintf(stderr, "format_loader: skipping %s: tx_mode must be on_change\n",
+                        name);
+                continue;
+            }
+            sig.tx_on_change = true;
+        }
+        if (c_tx_min_ms) {
+            if (!cJSON_IsNumber(c_tx_min_ms) || c_tx_min_ms->valuedouble < 0 ||
+                c_tx_min_ms->valuedouble > 86400000.0) {
+                fprintf(stderr,
+                        "format_loader: skipping %s: tx_min_interval_ms invalid\n",
+                        name);
+                continue;
+            }
+            sig.tx_min_interval_ms = (uint32_t)c_tx_min_ms->valueint;
+        }
+        if (sig.source == SIG_SOURCE_DB) {
+            sig.tx_on_change = true;
+            if (sig.db_key[0] == '\0') {
+                fprintf(stderr, "format_loader: skipping %s: empty db_key\n", name);
+                continue;
+            }
+        }
 
         sig_node_t *node = malloc(sizeof *node);
         if (!node) {

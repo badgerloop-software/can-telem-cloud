@@ -9,11 +9,13 @@ SRC = \
     src/format_loader.c \
     src/can_reader.c \
     src/decoder.c \
+    src/encoder.c \
+    src/db_watcher.c \
     src/writer.c \
     third_party/cJSON.c
 
 TARGET = can_telem
-LDFLAGS ?= -lcurl
+LDFLAGS ?= -lcurl -lsqlite3 -lpthread -lm
 
 $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)

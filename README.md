@@ -10,8 +10,15 @@ The JSON schema is the one documented in [`format_exp.md`](format_exp.md):
 ```
 "name": [<num bytes>, "data_type", "units",
          <nominal min>, <nominal max>,
-         "Category/Subsystem", "CAN ID (hex)", <bit offset>]
+         "Category/Subsystem", "CAN ID (hex)", <bit offset>,
+         "source?", "db_key?", "tx_mode?", <tx_min_interval_ms?>]
 ```
+
+The first 8 fields are unchanged and required. Optional fields (9-12):
+- `source`: `"can"` (default) or `"db"`
+- `db_key`: DB row key used when `source="db"` (default: signal name)
+- `tx_mode`: currently supports `"on_change"` only
+- `tx_min_interval_ms`: minimum interval between TX updates for this signal
 
 ## Data flow
 
@@ -142,6 +149,13 @@ optional). Blank lines and lines starting with `#` are ignored.
 | `influx_token` | API token with write access; may be omitted if `INFLUX_TOKEN` is set in the environment |
 | `influx_upload_interval_ms` | Minimum time between batched writes (default `1000`). Non-boolean signals use the **mean** of all decoded samples in the window; booleans use **OR** (true if any sample was true). |
 | `influx_measurement` | Influx line-protocol measurement name: letters, digits, underscore only (default `can_telem`) |
+| `db_enabled` | `true` / `false` — enable DB-driven CAN transmit |
+| `db_path` | SQLite DB path (required when `db_enabled=true`) |
+| `db_table` | Table name for signal values (default `signal_values`) |
+| `db_key_column` | Key column name (default `signal_key`) |
+| `db_value_column` | Value column name (default `signal_value`) |
+| `db_poll_interval_ms` | DB polling interval in ms (default `200`) |
+| `db_can_interface` | CAN interface for TX (default: same as `can_interface`) |
 
 Command-line options always override values from the config file.
 
@@ -191,5 +205,5 @@ ls logs/   # expect pack_current.csv, pack_voltage.csv, soc.csv, soh.csv
 - `format.json` contains a handful of duplicate signal names
   (`dcdc_deg`, `use_supp`, `use_dcdc`, `regen_brake`). Both definitions
   are loaded; rows for the shared name are appended to a single CSV.
-- Write/send capability is intentionally not implemented in this
-  version; the tool is read-only.
+- DB-backed signals (`source="db"`) can now be polled from a SQLite table and
+  transmitted to CAN when values change.
