@@ -21,6 +21,9 @@
 
 #include "encoder.h"
 
+#define DB_VALUE_EPSILON_REL 1e-9
+#define DB_MIN_RETRY_BACKOFF_MS 100u
+
 static void safe_copy(char *dst, size_t dst_sz, const char *src) {
     if (dst_sz == 0) return;
     size_t n = strlen(src);
@@ -96,7 +99,7 @@ static int parse_db_value(const signal_def_t *sig,
 static int values_equal(double a, double b) {
     double diff = fabs(a - b);
     double scale = fmax(1.0, fmax(fabs(a), fabs(b)));
-    return diff <= (1e-9 * scale);
+    return diff <= (DB_VALUE_EPSILON_REL * scale);
 }
 
 static int open_can_tx(const char *ifname) {
@@ -228,8 +231,8 @@ static void *watcher_thread(void *arg) {
                     } else if (!values_equal(st->last_value, value)) {
                         uint64_t now = monotonic_ns();
                         uint64_t min_ns = (uint64_t)st->sig->tx_min_interval_ms * 1000000ull;
-                        uint64_t fail_backoff_ns = (uint64_t)(ctx->poll_interval_ms > 100
-                            ? ctx->poll_interval_ms : 100u) * 1000000ull;
+                        uint64_t fail_backoff_ns = (uint64_t)(ctx->poll_interval_ms > DB_MIN_RETRY_BACKOFF_MS
+                            ? ctx->poll_interval_ms : DB_MIN_RETRY_BACKOFF_MS) * 1000000ull;
                         if (now >= st->retry_after_ns && now - st->last_tx_ns >= min_ns) {
                             if (send_signal(ctx, st, value) == 0) {
                                 st->retry_after_ns = 0;
