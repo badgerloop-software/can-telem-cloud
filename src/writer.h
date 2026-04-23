@@ -17,6 +17,7 @@ typedef struct writer_entry {
 
 typedef struct {
     char            out_dir[512];
+    char            unknown_dir[512];
     writer_entry_t  entries[WRITER_CACHE_SIZE];
     size_t          open_count;
 } writer_t;
@@ -34,6 +35,15 @@ int writer_init(writer_t *w, const char *out_dir);
 int writer_append(writer_t *w,
                   const signal_def_t *sig,
                   const decoded_value_t *dv);
+
+/*
+ * Append one raw CAN frame for an unknown/undecodable CAN ID into
+ * <out_dir>/unknown_ids/<can_id>.csv.
+ */
+int writer_append_unknown(writer_t *w,
+                          uint32_t can_id,
+                          const uint8_t *payload,
+                          uint8_t dlc);
 
 /*
  * Flush and close all open CSV files.

@@ -12,6 +12,8 @@
 #include <unistd.h>
 
 static const char CSV_HEADER[] = "timestamp_ns,value,raw_hex\n";
+static const char UNKNOWN_CSV_HEADER[] = "timestamp_ns,dlc,data_hex\n";
+static const char UNKNOWN_DIR_NAME[] = "unknown_ids";
 
 /* djb2 string hash */
 static size_t hash_name(const char *s) {
@@ -45,6 +47,17 @@ int writer_init(writer_t *w, const char *out_dir) {
 
     if (mkdir_p(w->out_dir) != 0) {
         fprintf(stderr, "writer: mkdir %s: %s\n", w->out_dir, strerror(errno));
+        return -1;
+    }
+    int dlen = snprintf(w->unknown_dir, sizeof w->unknown_dir,
+                        "%s/%s", w->out_dir, UNKNOWN_DIR_NAME);
+    if (dlen < 0 || (size_t)dlen >= sizeof w->unknown_dir) {
+        fprintf(stderr, "writer: unknown output path too long\n");
+        return -1;
+    }
+    if (mkdir_p(w->unknown_dir) != 0) {
+        fprintf(stderr, "writer: mkdir %s: %s\n",
+                w->unknown_dir, strerror(errno));
         return -1;
     }
     return 0;
@@ -106,6 +119,54 @@ int writer_append(writer_t *w,
     }
     fflush(f);
     return 0;
+}
+
+int writer_append_unknown(writer_t *w,
+                          uint32_t can_id,
+                          const uint8_t *payload,
+                          uint8_t dlc) {
+    if (!w || !payload) return -1;
+
+    if (dlc > 8) dlc = 8;
+
+    char path[sizeof w->unknown_dir + 16];
+    int len = snprintf(path, sizeof path, "%s/%08X.csv", w->unknown_dir, can_id);
+    if (len < 0 || (size_t)len >= sizeof path) {
+        fprintf(stderr, "writer: unknown path too long for %08X\n", can_id);
+        return -1;
+    }
+
+    struct stat st;
+    int newly_created = (stat(path, &st) != 0);
+    FILE *f = fopen(path, "a");
+    if (!f) {
+        fprintf(stderr, "writer: fopen %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    if (newly_created) {
+        fwrite(UNKNOWN_CSV_HEADER, 1, sizeof UNKNOWN_CSV_HEADER - 1, f);
+    }
+
+    char hex[(8 * 2) + 1];
+    for (uint8_t i = 0; i < dlc; ++i) {
+        snprintf(hex + (size_t)(i * 2), 3, "%02X", payload[i]);
+    }
+    hex[(size_t)dlc * 2] = '\0';
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long long ns = (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+
+    int rc = 0;
+    if (fprintf(f, "%lld,%u,%s\n", ns, (unsigned)dlc, hex) < 0) {
+        fprintf(stderr, "writer: fprintf unknown %08X: %s\n",
+                can_id, strerror(errno));
+        rc = -1;
+    } else {
+        fflush(f);
+    }
+    fclose(f);
+    return rc;
 }
 
 void writer_close(writer_t *w) {

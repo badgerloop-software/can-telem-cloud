@@ -175,6 +175,13 @@ timestamp_ns,value,raw_hex
 The directory is created on startup if it does not already exist. Files are
 opened in append mode, so repeated runs accumulate rows in the same CSV.
 
+Frames whose CAN ID does not successfully decode to any configured signal are
+written to per-ID CSV files under `<outdir>/unknown_ids/` with columns:
+
+```
+timestamp_ns,dlc,data_hex
+```
+
 Send `SIGINT` (Ctrl-C) or `SIGTERM` to stop the reader and flush/close all
 open CSV files cleanly.
 
@@ -192,7 +199,25 @@ sudo ip link set up vcan0
 cansend vcan0 101#0000FA00640000000
 
 ls logs/   # expect pack_current.csv, pack_voltage.csv, soc.csv, soh.csv
+
+# Send a frame on an ID not present in format.json.
+cansend vcan0 777#1122334455667788
+
+ls logs/unknown_ids/          # expect 00000777.csv
+tail -n +1 logs/unknown_ids/00000777.csv
 ```
+
+## End-to-end test procedure
+
+1. Set up vcan and start `can_telem` as shown in the smoke test above.
+2. Send one known frame (e.g., CAN ID `0x101`) and verify known signal CSVs are
+   updated in `<outdir>/`.
+3. Send one unknown frame (e.g., CAN ID `0x777`) and verify
+   `<outdir>/unknown_ids/00000777.csv` is created with header
+   `timestamp_ns,dlc,data_hex` and a new row.
+4. Send another frame on `0x777` and verify it appends a second row to the same
+   per-ID file.
+5. Stop `can_telem` with Ctrl-C and confirm files remain readable and complete.
 
 ## Notes and caveats
 

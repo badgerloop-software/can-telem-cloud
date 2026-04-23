@@ -93,6 +93,7 @@ int can_reader_loop(int fd,
         if (!(frame.can_id & CAN_EFF_FLAG)) id &= CAN_SFF_MASK;
 
         const sig_node_t *node = signal_table_lookup(table, id);
+        bool decoded_any = false;
         for (; node; node = node->next) {
             if (node->sig.can_id != id) continue;
             if (node->sig.placeholder) continue; /* "FFF" -> unassigned */
@@ -102,8 +103,12 @@ int can_reader_loop(int fd,
                                 frame.can_dlc, &dv) != 0) {
                 continue; /* overflow or misaligned */
             }
+            decoded_any = true;
             writer_append(w, &node->sig, &dv);
             if (influx) influx_accumulate(influx, &node->sig, &dv);
+        }
+        if (!decoded_any) {
+            writer_append_unknown(w, id, frame.data, frame.can_dlc);
         }
         if (influx) influx_tick(influx);
     }
