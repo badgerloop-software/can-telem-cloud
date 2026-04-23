@@ -18,7 +18,8 @@ int can_reader_open(const char *ifname);
 /*
  * Blocking receive loop: reads frames from `fd`, matches each ID against
  * `table`, decodes every matching signal (skipping placeholders with
- * can_id==0xFFF) and appends the value via the writer.
+ * can_id==0xFFF) and appends the value via the writer. Frames that do not
+ * decode any configured signal are logged to per-ID CSVs under unknown_ids/.
  * If `influx` is non-NULL and enabled, updates Influx aggregators and may
  * flush to the cloud on a timer (see config).
  * Runs until `*running` becomes 0.
