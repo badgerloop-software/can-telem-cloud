@@ -14,6 +14,11 @@
 static const char CSV_HEADER[] = "timestamp_ns,value,raw_hex\n";
 static const char UNKNOWN_CSV_HEADER[] = "timestamp_ns,dlc,data_hex\n";
 static const char UNKNOWN_DIR_NAME[] = "unknown_ids";
+static const uint8_t MAX_CAN_DLC = 8;
+enum {
+    UNKNOWN_PATH_SUFFIX_MAX = 16, /* '/' + 8 hex chars + ".csv" + '\0' */
+    UNKNOWN_HEX_BUFFER_SIZE = (8 * 2) + 1
+};
 
 /* djb2 string hash */
 static size_t hash_name(const char *s) {
@@ -127,9 +132,9 @@ int writer_append_unknown(writer_t *w,
                           uint8_t dlc) {
     if (!w || !payload) return -1;
 
-    if (dlc > 8) dlc = 8;
+    if (dlc > MAX_CAN_DLC) dlc = MAX_CAN_DLC;
 
-    char path[sizeof w->unknown_dir + 16];
+    char path[sizeof(w->unknown_dir) + UNKNOWN_PATH_SUFFIX_MAX];
     int len = snprintf(path, sizeof path, "%s/%08X.csv", w->unknown_dir, can_id);
     if (len < 0 || (size_t)len >= sizeof path) {
         fprintf(stderr, "writer: unknown path too long for %08X\n", can_id);
@@ -137,7 +142,13 @@ int writer_append_unknown(writer_t *w,
     }
 
     struct stat st;
-    int newly_created = (stat(path, &st) != 0);
+    errno = 0;
+    int st_rc = stat(path, &st);
+    int newly_created = (st_rc != 0 && errno == ENOENT);
+    if (st_rc != 0 && errno != ENOENT) {
+        fprintf(stderr, "writer: stat %s: %s\n", path, strerror(errno));
+        return -1;
+    }
     FILE *f = fopen(path, "a");
     if (!f) {
         fprintf(stderr, "writer: fopen %s: %s\n", path, strerror(errno));
@@ -147,9 +158,11 @@ int writer_append_unknown(writer_t *w,
         fwrite(UNKNOWN_CSV_HEADER, 1, sizeof UNKNOWN_CSV_HEADER - 1, f);
     }
 
-    char hex[(8 * 2) + 1];
+    static const char HEX[] = "0123456789ABCDEF";
+    char hex[UNKNOWN_HEX_BUFFER_SIZE];
     for (uint8_t i = 0; i < dlc; ++i) {
-        snprintf(hex + (size_t)(i * 2), 3, "%02X", payload[i]);
+        hex[(size_t)(i * 2)] = HEX[(payload[i] >> 4) & 0x0F];
+        hex[(size_t)(i * 2) + 1] = HEX[payload[i] & 0x0F];
     }
     hex[(size_t)dlc * 2] = '\0';
 
