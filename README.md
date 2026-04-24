@@ -1,209 +1,259 @@
-# can_telem
+# can-telem-cloud
 
-A small C utility that reads CAN frames from a Linux SocketCAN interface,
-matches each frame's 11-bit ID against the signal definitions in
-[`format.json`](format.json), decodes every matching field, and appends the
-value to a per-signal CSV log.
+A lightweight C daemon for Raspberry Pi that reads raw CAN frames from a SocketCAN interface, decodes every signal defined in a JSON format file, and fans the data out to three independent sinks simultaneously:
 
-The JSON schema is the one documented in [`format_exp.md`](format_exp.md):
+| Sink | What it does |
+|------|-------------|
+| **CSV logger** | Appends every decoded sample to a per-signal `.csv` file on a USB drive |
+| **InfluxDB** | Batches samples and uploads to InfluxDB Cloud on a configurable interval |
+| **Serial radio** | Periodically serializes the latest value of every active signal and writes it to a UART radio (e.g. RFD900A) for wireless ground-station reception |
 
-```
-"name": [<num bytes>, "data_type", "units",
-         <nominal min>, <nominal max>,
-         "Category/Subsystem", "CAN ID (hex)", <bit offset>,
-         "source?", "db_key?", "tx_mode?", <tx_min_interval_ms?>]
-```
+---
 
-The first 8 fields are unchanged and required. Optional fields (9-12):
-- `source`: `"can"` (default) or `"db"`
-- `db_key`: DB row key used when `source="db"` (default: signal name)
-- `tx_mode`: currently supports `"on_change"` only
-- `tx_min_interval_ms`: minimum interval between TX updates for this signal
-
-## Data flow
-
-At startup, optional [`can_telem.conf`](can_telem.conf.example) (and `-c`) plus CLI flags set paths, the CAN interface, and optional InfluxDB Cloud credentials. [`format.json`](format.json) is parsed into a hash table keyed by CAN ID so each incoming frame can be matched to one or more signal definitions.
-
-While running, every decoded sample follows **two independent paths**: full-rate append to local CSV files, and (if enabled) in-memory aggregation for batched cloud upload.
-
-Diagram (monospace; use a fixed-width font in the editor or GitHub raw view):
+## Architecture
 
 ```
-                         STARTUP
-    +------------------+  +------------------+  +------------------+
-    | can_telem.conf   |  | CLI -i -f -o -c   |  | INFLUX_TOKEN     |
-    | (optional file)  |  | overrides file   |  | env (optional)   |
-    +--------+---------+  +--------+---------+  +--------+---------+
-             |                     |                     |
-             +---------------------+---------------------+
-                                   |
-                                   v
-                        +------------------------+
-                        | Parse config, init     |
-                        | Influx + libcurl if on |
-                        +-----------+------------+
-                                    |
-              +---------------------+---------------------+
-              |                                           |
-              v                                           v
-   +------------------------+              +------------------------+
-   | Load format.json       |              | Open SocketCAN       |
-   | Build hash: CAN ID ->  |              | bind to interface    |
-   | list of signal defs    |              | (e.g. can0)          |
-   +------------+-----------+              +------------+-----------+
-                |                                       |
-                +---------------------+-------------------+
-                                      |
-                                      v
-                               ( enter main loop )
+┌──────────────────────────────────────────────────────────────────────┐
+│                          STARTUP                                     │
+│                                                                      │
+│  can_telem.conf ──┐                                                  │
+│  CLI flags     ───┼──► Parse config & credentials                   │
+│  INFLUX_TOKEN  ───┘         │                                        │
+│                             ├──► Load format.json → signal hash table│
+│                             ├──► Open SocketCAN (e.g. can0)          │
+│                             ├──► Init CSV writer  → /mnt/usb/        │
+│                             ├──► Init InfluxDB    → libcurl          │
+│                             └──► Init serial radio → /dev/ttyUSB0   │
+└──────────────────────────────────────────────────────────────────────┘
 
-                         RUNTIME (each iteration)
-                        +------------------------+
-                        | poll or read           |
-                        | one CAN frame          |
-                        +-----------+------------+
-                                    |
-                                    v
-                        +------------------------+
-                        | Match CAN ID in table  |
-                        | For each signal: decode|
-                        +-----------+------------+
-                                    |
-                    +---------------+---------------+
-                    |                               |
-                    v                               v
-         +------------------------+    +------------------------+
-         | CSV writer             |    | Influx accumulator     |
-         | 1 row per decode       |    | (disabled = skip all)  |
-         | full bus rate to disk  |    | sum+count or bool OR   |
-         +------------+-----------+    +------------+-------------+
-                      |                            |
-                      v                            |
-         +------------------------+                |
-         | logs/<signal>.csv      |                |
-         +------------------------+                |
-                                                   |
-                                                   |  (decodes update agg)
-                                                   v
-                        +------------------------+
-                        | Tick: every N ms or    |
-                        | poll wake (Influx on) |
-                        | flush agg to LP body   |
-                        +-----------+------------+
-                                    |
-                                    v
-                        +------------------------+
-                        | Line protocol body    |
-                        +-----------+------------+
-                                    |
-                                    v
-                        +------------------------+
-                        | HTTPS POST            |
-                        | InfluxDB Cloud v2     |
-                        +------------------------+
+┌──────────────────────────────────────────────────────────────────────┐
+│                        RUNTIME LOOP (poll)                           │
+│                                                                      │
+│   ┌───────────┐    ┌──────────────────┐                              │
+│   │  CAN frame│───►│ decoder_extract() │                             │
+│   │  arrives  │    └────────┬─────────┘                              │
+│   └───────────┘             │                                        │
+│                    ┌────────┴──────────────────┐                     │
+│                    │                           │                     │
+│                    ▼                           ▼                     │
+│          ┌──────────────────┐       ┌─────────────────────┐         │
+│          │  writer_append() │       │  influx_accumulate() │         │
+│          │  → CSV row on    │       │  serial_radio_       │         │
+│          │    USB drive     │       │    accumulate()      │         │
+│          └──────────────────┘       └──────────┬──────────┘         │
+│                                                │                     │
+│   ┌───────────┐                                │                     │
+│   │poll() 200 │    ┌───────────────────────────┘                     │
+│   │ms timeout │───►│                                                 │
+│   └───────────┘    ├──► influx_tick()                                │
+│                    │    Flush batch → InfluxDB Cloud (HTTPS/libcurl) │
+│                    │                                                  │
+│                    └──► serial_radio_tick()                          │
+│                         Flush latest values → /dev/ttyUSB0           │
+│                         Format: <ts_ns>,<signal>,<value>\n           │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Aggregation (cloud only):** between each successful POST, non-boolean samples contribute to a running sum and count so the next point is the **mean** over that window; boolean samples are combined with **OR** (true if any sample was true). CSV rows are **not** averaged—each decode appends one line with its own timestamp.
-
-## Build
-
-Requires a Linux kernel with SocketCAN headers, a C11 compiler, and
-**libcurl** with TLS (Debian / Raspberry Pi OS: `sudo apt install libcurl4-openssl-dev`).
-
-[cJSON](https://github.com/DaveGamble/cJSON) is vendored in `third_party/`.
+### Data flow detail
 
 ```
+                          CAN frame (SocketCAN)
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │  Lookup CAN ID in hash table│
+                    │  → list of signal_def_t     │
+                    └─────────────┬──────────────┘
+                                  │  (one frame can carry N signals)
+                     ┌────────────┼─────────────┐
+                     ▼            ▼             ▼
+              ┌──────────┐  ┌──────────┐  ┌──────────┐
+              │  writer  │  │  influx  │  │  radio   │
+              │ (always) │  │(optional)│  │(optional)│
+              └────┬─────┘  └────┬─────┘  └────┬─────┘
+                   │             │              │
+            per-signal     batched mean    last value
+             CSV append    → InfluxDB     → UART radio
+           /mnt/usb/*.csv  every N sec   every N ms
+```
+
+---
+
+## Hardware Setup
+
+### Raspberry Pi 4 (driverio board)
+
+| Component | Details |
+|-----------|---------|
+| CAN hat | MCP2515 on `can0`, 500 kbps |
+| USB log drive | `ext4` mounted at `/mnt/usb` |
+| LTE modem | Quectel EG25-G on `/dev/ttyUSB1–4`; NTP via `systemd-timesyncd` for accurate timestamps |
+| Serial radio | RFD900A on `/dev/ttyUSB0` (Silicon Labs CP2102); 115200 baud, NET\_ID 420 |
+
+### Bring up CAN interface
+
+```bash
+sudo ip link set can0 up type can bitrate 500000
+```
+
+### Mount USB drive
+
+```bash
+sudo mkdir -p /mnt/usb
+sudo mount /dev/sda1 /mnt/usb
+```
+
+Add to `/etc/fstab` for persistence:
+
+```
+UUID=<your-uuid>  /mnt/usb  ext4  defaults,noatime  0  2
+```
+
+---
+
+## Building
+
+```bash
+sudo apt install libcurl4-openssl-dev libsqlite3-dev
 make
 ```
 
-Produces the `can_telem` binary in the project root.
+The binary is `./can_telem`.
 
-## Usage
+---
+
+## Configuration
+
+Copy and edit the example:
+
+```bash
+cp can_telem.conf.example can_telem.conf
+```
+
+### Full config reference
+
+```ini
+# ── Core ────────────────────────────────────────────────────────────
+can_interface          = can0
+format_file            = /home/sunpi/can-telem-cloud/format.json
+output_dir             = /mnt/usb
+
+# ── InfluxDB Cloud (optional) ───────────────────────────────────────
+influx_url             = https://us-east-1-1.aws.cloud2.influxdata.com
+influx_org             = your-org
+influx_bucket          = telemetry
+influx_token           = your-token
+influx_flush_interval  = 5
+
+# ── Serial radio (optional) ─────────────────────────────────────────
+radio_enabled          = true
+radio_device           = /dev/ttyUSB0
+radio_baud             = 115200
+radio_flush_interval_ms = 1000
+```
+
+### CLI flags
 
 ```
-./can_telem [-c <file>] [-i <iface>] [-f <format.json>] [-o <outdir>] [-h]
-  -c   path to a key=value config file (optional; see below)
-  -i   CAN interface name          (default: can0)
-  -f   path to signal format JSON  (default: ./format.json)
-  -o   output directory for CSVs   (default: ./logs)
-  -h   help
+can_telem [-c config] [-i interface] [-f format.json] [-o output_dir]
 ```
 
-### Config file
+CLI flags override values in the config file.
 
-If `./can_telem.conf` exists in the current working directory, it is read
-automatically. You can also pass an explicit path with `-c /path/to/file`.
+---
 
-The file is plain text, one `key = value` per line (spaces around `=` are
-optional). Blank lines and lines starting with `#` are ignored.
+## Signal format file
 
-| Key | Meaning |
-|-----|---------|
-| `output_dir` | Directory where per-signal CSV files are written |
-| `format_file` | Path to `format.json` (or equivalent) |
-| `can_interface` | SocketCAN interface name (alias: `interface`) |
-| `influx_enabled` | `true` / `false` — enable InfluxDB Cloud uploads |
-| `influx_url` | Cloud **base URL** only (e.g. `https://…cloud2.influxdata.com`, no `/api/…` path) |
-| `influx_org` | Organization name (Load Data → API Tokens in the Cloud UI) |
-| `influx_bucket` | Bucket name |
-| `influx_token` | API token with write access; may be omitted if `INFLUX_TOKEN` is set in the environment |
-| `influx_upload_interval_ms` | Minimum time between batched writes (default `1000`). Non-boolean signals use the **mean** of all decoded samples in the window; booleans use **OR** (true if any sample was true). |
-| `influx_measurement` | Influx line-protocol measurement name: letters, digits, underscore only (default `can_telem`) |
-| `db_enabled` | `true` / `false` — enable DB-driven CAN transmit |
-| `db_path` | SQLite DB path (required when `db_enabled=true`) |
-| `db_table` | Table name for signal values (default `signal_values`) |
-| `db_key_column` | Key column name (default `signal_key`) |
-| `db_value_column` | Value column name (default `signal_value`) |
-| `db_poll_interval_ms` | DB polling interval in ms (default `200`) |
-| `db_can_interface` | CAN interface for TX (default: same as `can_interface`) |
+`format.json` (provided by the `sc-data-format` submodule) defines every signal:
 
-Command-line options always override values from the config file.
+```json
+"signal_name": [<bytes>, "type", "units",
+                <min>, <max>, "Category", "0xID",
+                <bit_offset>, "source?", "db_key?",
+                "tx_mode?", <tx_min_interval_ms?>]
+```
 
-When Influx is enabled, the CAN reader uses `poll()` with a 200 ms timeout so
-upload intervals still fire if the bus goes quiet; with Influx disabled the
-socket read stays fully blocking as before.
+---
 
-Copy [`can_telem.conf.example`](can_telem.conf.example) to `can_telem.conf`
-next to the binary (or your working directory) and edit the paths.
+## CSV output
 
-Each decoded signal is written to `<outdir>/<signal_name>.csv` with columns:
+One file per signal at `<output_dir>/<signal_name>.csv`:
 
 ```
 timestamp_ns,value,raw_hex
+1777013464503432008,3.412,3dad5b40
+1777013464612834001,3.413,52ae5b40
 ```
 
-The directory is created on startup if it does not already exist. Files are
-opened in append mode, so repeated runs accumulate rows in the same CSV.
+`timestamp_ns` is a Unix nanosecond timestamp from `CLOCK_REALTIME` (synced via NTP over LTE).
 
-Send `SIGINT` (Ctrl-C) or `SIGTERM` to stop the reader and flush/close all
-open CSV files cleanly.
+---
 
-## Quick smoke test with a virtual CAN bus
+## Serial radio output
+
+The radio module flushes the **latest decoded value** for every active signal once per `radio_flush_interval_ms`. Each flush writes one line per signal to the serial port:
 
 ```
-sudo modprobe vcan
-sudo ip link add dev vcan0 type vcan
-sudo ip link set up vcan0
-
-./can_telem -i vcan0 -f format.json -o logs &
-
-# Send a frame on CAN ID 0x101 with an 8-byte payload. This ID has
-# pack_current, pack_voltage, soc, and soh defined in format.json.
-cansend vcan0 101#0000FA00640000000
-
-ls logs/   # expect pack_current.csv, pack_voltage.csv, soc.csv, soh.csv
+<timestamp_ns>,<signal_name>,<value>
 ```
 
-## Notes and caveats
+Example flush frame (1-second window):
 
-- Decoding assumes little-endian (Intel) byte order, which matches the
-  SocketCAN convention. Motorola/big-endian support can be added as a
-  per-signal flag later.
-- Signals declared with CAN ID `"FFF"` in `format.json` are treated as
-  unassigned placeholders; they are loaded for inspection but never
-  matched against incoming frames.
-- `format.json` contains a handful of duplicate signal names
-  (`dcdc_deg`, `use_supp`, `use_dcdc`, `regen_brake`). Both definitions
-  are loaded; rows for the shared name are appended to a single CSV.
-- DB-backed signals (`source="db"`) can now be polled from a SQLite table and
-  transmitted to CAN when values change.
+```
+1777013464503432008,cell_group1_voltage,3.412
+1777013464503432008,bms_input_voltage,19.2
+1777013464503432008,bps_fault,0
+```
+
+### RFD900A setup notes
+
+| Parameter | Value |
+|-----------|-------|
+| Baud (serial) | 115200 |
+| Air data rate | 96 kbps |
+| NET\_ID | 420 |
+| MAVLINK mode | 0 (raw transparent) |
+| RTSCTS | 0 |
+
+Both ends must have identical settings. To verify:
+
+```bash
+# Enter AT command mode (1 s silence → +++ → 1 s silence)
+stty -F /dev/ttyUSB0 115200 raw -echo cs8 -parenb -cstopb -crtscts
+# then send: +++  (wait)  ATI5  (shows all settings)  ATO  (return to transparent)
+```
+
+---
+
+## Running
+
+```bash
+# foreground
+sudo ./can_telem -c can_telem.conf
+
+# background (persistent across SSH sessions)
+nohup sudo ./can_telem -c can_telem.conf > /tmp/can_telem.log 2>&1 &
+```
+
+---
+
+## Source layout
+
+```
+can-telem-cloud/
+├── src/
+│   ├── main.c            — entry point, config init, signal handling
+│   ├── config.[ch]       — config file parser
+│   ├── format_loader.[ch]— format.json parser → signal hash table
+│   ├── decoder.[ch]      — bit-exact CAN signal decoder
+│   ├── can_reader.[ch]   — SocketCAN poll loop, fan-out to all sinks
+│   ├── writer.[ch]       — CSV append sink
+│   ├── influx.[ch]       — InfluxDB Cloud batch upload sink
+│   ├── serial_radio.[ch] — UART radio sink (RFD900A / CP2102)
+│   ├── encoder.[ch]      — CAN signal encoder (for TX path)
+│   └── db_watcher.[ch]   — SQLite DB watcher for TX signals
+├── third_party/
+│   └── cJSON.[ch]        — JSON parser
+├── format.json           — (git submodule: sc-data-format)
+├── can_telem.conf.example
+└── Makefile
+```

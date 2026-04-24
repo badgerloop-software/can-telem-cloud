@@ -48,6 +48,16 @@ typedef struct {
     bool has_db_poll_interval_ms;
     char db_can_interface[CONFIG_VALUE_MAX];
     bool has_db_can_interface;
+
+    /* --- Serial radio --- */
+    bool     radio_enabled;
+    bool     has_radio_enabled;
+    char     radio_device[CONFIG_VALUE_MAX];
+    bool     has_radio_device;
+    uint32_t radio_baud;
+    bool     has_radio_baud;
+    uint32_t radio_flush_interval_ms;
+    bool     has_radio_flush_interval_ms;
 } config_file_t;
 
 /*
@@ -73,10 +83,14 @@ typedef struct {
  *   db_value_column            — value column (default signal_value)
  *   db_poll_interval_ms        — DB polling period in ms (default 200)
  *   db_can_interface           — CAN interface for TX (default can_interface)
+ *   radio_enabled              — true/false (default false)
+ *   radio_device               — serial device path (default /dev/ttyUSB0)
+ *   radio_baud                 — baud rate: 1200/2400/4800/9600/19200/38400/57600/115200
+ *   radio_flush_interval_ms    — serial flush period in ms (default 1000)
  *
  * Returns 0 on success, -1 on failure (missing file when path was
- * required, or I/O error). Errors are printed to stderr.
+ * required, or I/O error).
  */
 int config_file_load(const char *path, config_file_t *out);
 
-#endif
+#endif /* CAN_TELEM_CONFIG_H */

@@ -53,12 +53,14 @@ int can_reader_loop(int fd,
                     const signal_table_t *table,
                     writer_t *w,
                     influx_ctx_t *influx,
+                    serial_radio_ctx_t *radio,
                     volatile sig_atomic_t *running) {
     if (fd < 0 || !table || !w || !running) return -1;
 
     struct can_frame frame;
     while (*running) {
-        if (influx) {
+        /* Use poll with a timeout whenever any timed sink needs periodic ticks. */
+        if (influx || (radio && radio->enabled)) {
             int poll_ms = 200;
             struct pollfd pfd = {.fd = fd, .events = POLLIN};
             int pr = poll(&pfd, 1, poll_ms);
@@ -68,7 +70,8 @@ int can_reader_loop(int fd,
                 return -1;
             }
             if (pr == 0) {
-                influx_tick(influx);
+                if (influx) influx_tick(influx);
+                serial_radio_tick(radio);
                 continue;
             }
             if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -79,7 +82,7 @@ int can_reader_loop(int fd,
 
         ssize_t n = read(fd, &frame, sizeof frame);
         if (n < 0) {
-            if (errno == EINTR) continue; /* likely our shutdown signal */
+            if (errno == EINTR) continue;
             fprintf(stderr, "can_reader: read: %s\n", strerror(errno));
             return -1;
         }
@@ -87,7 +90,6 @@ int can_reader_loop(int fd,
             fprintf(stderr, "can_reader: short read %zd bytes\n", n);
             continue;
         }
-        /* Ignore error frames and drop the flag bits. */
         if (frame.can_id & CAN_ERR_FLAG) continue;
         uint32_t id = frame.can_id & CAN_EFF_MASK;
         if (!(frame.can_id & CAN_EFF_FLAG)) id &= CAN_SFF_MASK;
@@ -95,17 +97,19 @@ int can_reader_loop(int fd,
         const sig_node_t *node = signal_table_lookup(table, id);
         for (; node; node = node->next) {
             if (node->sig.can_id != id) continue;
-            if (node->sig.placeholder) continue; /* "FFF" -> unassigned */
+            if (node->sig.placeholder) continue;
 
             decoded_value_t dv;
             if (decoder_extract(&node->sig, frame.data,
                                 frame.can_dlc, &dv) != 0) {
-                continue; /* overflow or misaligned */
+                continue;
             }
             writer_append(w, &node->sig, &dv);
             if (influx) influx_accumulate(influx, &node->sig, &dv);
+            serial_radio_accumulate(radio, &node->sig, &dv);
         }
         if (influx) influx_tick(influx);
+        serial_radio_tick(radio);
     }
 
     return 0;

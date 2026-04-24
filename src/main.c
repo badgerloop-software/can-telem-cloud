@@ -12,6 +12,7 @@
 #include "db_watcher.h"
 #include "format_loader.h"
 #include "influx.h"
+#include "serial_radio.h"
 #include "writer.h"
 
 static volatile sig_atomic_t g_running = 1;
@@ -34,7 +35,9 @@ static void usage(const char *argv0) {
         "  -h   show this help\n"
         "\n"
         "CLI flags override values from the config file.\n"
-        "InfluxDB Cloud (optional) is configured in the same file; see README.\n",
+        "InfluxDB Cloud (optional) is configured in the same file; see README.\n"
+        "Serial radio (optional): radio_enabled, radio_device, radio_baud,\n"
+        "  radio_flush_interval_ms in the config file.\n",
         argv0);
 }
 
@@ -118,8 +121,19 @@ int main(int argc, char **argv) {
     }
     influx_ctx_t *pinflux = influx.enabled ? &influx : NULL;
 
+    serial_radio_ctx_t radio;
+    memset(&radio, 0, sizeof radio);
+    if (serial_radio_init(&radio, &cf) != 0) {
+        influx_shutdown(&influx);
+        writer_close(&w);
+        signal_table_free(&table);
+        return 1;
+    }
+    serial_radio_ctx_t *pradio = radio.enabled ? &radio : NULL;
+
     int fd = can_reader_open(iface);
     if (fd < 0) {
+        serial_radio_shutdown(&radio);
         influx_shutdown(&influx);
         writer_close(&w);
         signal_table_free(&table);
@@ -133,6 +147,7 @@ int main(int argc, char **argv) {
     int db_rc = db_watcher_start(&dbw, &cf, &table, iface, &g_running);
     if (db_rc < 0) {
         close(fd);
+        serial_radio_shutdown(&radio);
         influx_shutdown(&influx);
         writer_close(&w);
         signal_table_free(&table);
@@ -145,11 +160,12 @@ int main(int argc, char **argv) {
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    int rc = can_reader_loop(fd, &table, &w, pinflux, &g_running);
+    int rc = can_reader_loop(fd, &table, &w, pinflux, pradio, &g_running);
 
     fprintf(stderr, "can_telem: shutting down\n");
     close(fd);
     db_watcher_stop(&dbw);
+    serial_radio_shutdown(&radio);
     influx_shutdown(&influx);
     writer_close(&w);
     signal_table_free(&table);

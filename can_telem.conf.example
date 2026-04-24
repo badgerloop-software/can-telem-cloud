@@ -31,3 +31,14 @@ can_interface = can0
 # db_value_column = signal_value
 # db_poll_interval_ms = 200
 # db_can_interface = can0
+
+# --- Optional: Serial radio telemetry ---
+# When enabled, the latest decoded value for every active signal is written
+# to the serial device once per radio_flush_interval_ms in the format:
+#   <timestamp_ns>,<signal_name>,<value>
+# The radio shares the same poll loop as InfluxDB so it adds no extra threads.
+#
+# radio_enabled = true
+# radio_device = /dev/ttyUSB0
+# radio_baud = 9600
+# radio_flush_interval_ms = 1000

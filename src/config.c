@@ -197,6 +197,52 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         out->has_db_can_interface = true;
         return 0;
     }
+    /* --- Serial radio --- */
+    if (strcasecmp(key, "radio_enabled") == 0) {
+        bool b;
+        if (parse_bool(val, &b) != 0) {
+            fprintf(stderr, "config: radio_enabled: expected boolean\n");
+            return -1;
+        }
+        out->radio_enabled     = b;
+        out->has_radio_enabled = true;
+        return 0;
+    }
+    if (strcasecmp(key, "radio_device") == 0) {
+        if (strlen(val) >= sizeof out->radio_device) {
+            fprintf(stderr, "config: radio_device value too long\n");
+            return -1;
+        }
+        strcpy(out->radio_device, val);
+        out->has_radio_device = true;
+        return 0;
+    }
+    if (strcasecmp(key, "radio_baud") == 0) {
+        errno = 0;
+        char *end = NULL;
+        unsigned long v = strtoul(val, &end, 10);
+        if (errno != 0 || end == val || *end != '\0' || v > 4000000UL) {
+            fprintf(stderr, "config: radio_baud: invalid baud rate\n");
+            return -1;
+        }
+        out->radio_baud     = (uint32_t)v;
+        out->has_radio_baud = true;
+        return 0;
+    }
+    if (strcasecmp(key, "radio_flush_interval_ms") == 0) {
+        errno = 0;
+        char *end = NULL;
+        unsigned long v = strtoul(val, &end, 10);
+        if (errno != 0 || end == val || *end != '\0' || v > 86400000UL) {
+            fprintf(stderr,
+                    "config: radio_flush_interval_ms: invalid "
+                    "(use 1..86400000 ms)\n");
+            return -1;
+        }
+        out->radio_flush_interval_ms     = (uint32_t)v;
+        out->has_radio_flush_interval_ms = true;
+        return 0;
+    }
     fprintf(stderr, "config: unknown key '%s' (ignored)\n", key);
     return 0;
 }
@@ -215,7 +261,6 @@ int config_file_load(const char *path, config_file_t *out) {
     unsigned lineno = 0;
     while (fgets(line, sizeof line, f)) {
         ++lineno;
-        /* strip newline */
         size_t len = strlen(line);
         if (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
