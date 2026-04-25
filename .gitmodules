@@ -1,0 +1,3 @@
+[submodule "sc-data-format"]
+	path = sc-data-format
+	url = git@github.com:badgerloop-software/sc-data-format.git

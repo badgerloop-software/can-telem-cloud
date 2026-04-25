@@ -59,25 +59,23 @@ int can_reader_loop(int fd,
 
     struct can_frame frame;
     while (*running) {
-        /* Use poll with a timeout whenever any timed sink needs periodic ticks. */
-        if (influx || (radio && radio->enabled)) {
-            int poll_ms = 200;
-            struct pollfd pfd = {.fd = fd, .events = POLLIN};
-            int pr = poll(&pfd, 1, poll_ms);
-            if (pr < 0) {
-                if (errno == EINTR) continue;
-                fprintf(stderr, "can_reader: poll: %s\n", strerror(errno));
-                return -1;
-            }
-            if (pr == 0) {
-                if (influx) influx_tick(influx);
-                serial_radio_tick(radio);
-                continue;
-            }
-            if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                fprintf(stderr, "can_reader: poll: socket error\n");
-                return -1;
-            }
+        int poll_ms = 200;
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int pr = poll(&pfd, 1, poll_ms);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            fprintf(stderr, "can_reader: poll: %s\n", strerror(errno));
+            return -1;
+        }
+        if (pr == 0) {
+            writer_tick(w);
+            if (influx) influx_tick(influx);
+            serial_radio_tick(radio);
+            continue;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            fprintf(stderr, "can_reader: poll: socket error\n");
+            return -1;
         }
 
         ssize_t n = read(fd, &frame, sizeof frame);
@@ -108,6 +106,7 @@ int can_reader_loop(int fd,
             if (influx) influx_accumulate(influx, &node->sig, &dv);
             serial_radio_accumulate(radio, &node->sig, &dv);
         }
+        writer_tick(w);
         if (influx) influx_tick(influx);
         serial_radio_tick(radio);
     }

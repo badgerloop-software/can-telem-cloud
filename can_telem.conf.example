@@ -2,7 +2,7 @@
 # Keys are case-insensitive. CLI flags (-i, -f, -o) override these values.
 
 output_dir = /var/tmp/can_telem_logs
-format_file = ./format.json
+format_file = ./sc-data-format/format.json
 can_interface = can0
 
 # --- Optional: InfluxDB Cloud (HTTPS write API v2) ---

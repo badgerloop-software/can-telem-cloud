@@ -30,7 +30,7 @@ static void usage(const char *argv0) {
         "  -c   path to config file (key=value). If omitted, ./can_telem.conf is\n"
         "       read when that file exists.\n"
         "  -i   CAN interface name          (default: can0)\n"
-        "  -f   path to signal format JSON  (default: ./format.json)\n"
+        "  -f   path to signal format JSON  (default: ./sc-data-format/format.json)\n"
         "  -o   output directory for CSVs   (default: ./logs)\n"
         "  -h   show this help\n"
         "\n"
@@ -43,7 +43,7 @@ static void usage(const char *argv0) {
 
 int main(int argc, char **argv) {
     const char *iface   = "can0";
-    const char *fmtpath = "./format.json";
+    const char *fmtpath = "./sc-data-format/format.json";
     const char *outdir  = "./logs";
 
     char store_iface[CONFIG_VALUE_MAX];
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
             table.count, table.placeholder_count, fmtpath);
 
     writer_t w;
-    if (writer_init(&w, outdir) != 0) {
+    if (writer_init(&w, outdir, &table) != 0) {
         signal_table_free(&table);
         return 1;
     }
@@ -139,8 +139,8 @@ int main(int argc, char **argv) {
         signal_table_free(&table);
         return 1;
     }
-    fprintf(stderr, "can_telem: listening on %s, writing to %s/\n",
-            iface, outdir);
+    fprintf(stderr, "can_telem: listening on %s, writing snapshots to %s/%s\n",
+            iface, outdir, WRITER_SNAPSHOT_FILE);
 
     db_watcher_t dbw;
     memset(&dbw, 0, sizeof dbw);

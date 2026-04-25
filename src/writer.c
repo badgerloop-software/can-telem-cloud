@@ -11,30 +11,37 @@
 #include <time.h>
 #include <unistd.h>
 
-static const char CSV_HEADER[] = "timestamp_ns,value,raw_hex\n";
-
-/* djb2 string hash */
-static size_t hash_name(const char *s) {
-    size_t h = 5381;
-    for (; *s; ++s) h = ((h << 5) + h) + (unsigned char)*s;
-    return h;
-}
-
 static int mkdir_p(const char *path) {
-    /* Accept an existing directory, create a single-level directory otherwise.
-     * We don't walk components because the plan only needs one level. */
     struct stat st;
-    if (stat(path, &st) == 0) {
-        return S_ISDIR(st.st_mode) ? 0 : -1;
-    }
+    if (stat(path, &st) == 0) return S_ISDIR(st.st_mode) ? 0 : -1;
     if (mkdir(path, 0755) == 0) return 0;
     if (errno == EEXIST) return 0;
     return -1;
 }
 
-int writer_init(writer_t *w, const char *out_dir) {
-    if (!w || !out_dir) return -1;
+static int64_t mono_diff_ms(const struct timespec *a,
+                            const struct timespec *b) {
+    return (int64_t)(a->tv_sec - b->tv_sec) * 1000LL +
+           (int64_t)(a->tv_nsec - b->tv_nsec) / 1000000LL;
+}
+
+static int cmp_strptr(const void *a, const void *b) {
+    const char *const *sa = (const char *const *)a;
+    const char *const *sb = (const char *const *)b;
+    return strcmp(*sa, *sb);
+}
+
+static ssize_t column_index(const writer_t *w, const char *name) {
+    for (size_t i = 0; i < w->col_count; ++i) {
+        if (strcmp(w->col_names[i], name) == 0) return (ssize_t)i;
+    }
+    return -1;
+}
+
+int writer_init(writer_t *w, const char *out_dir, const signal_table_t *table) {
+    if (!w || !out_dir || !table) return -1;
     memset(w, 0, sizeof *w);
+    w->snapshot_interval_ms = WRITER_DEFAULT_SNAPSHOT_INTERVAL_MS;
 
     size_t n = strlen(out_dir);
     if (n >= sizeof w->out_dir) {
@@ -47,75 +54,156 @@ int writer_init(writer_t *w, const char *out_dir) {
         fprintf(stderr, "writer: mkdir %s: %s\n", w->out_dir, strerror(errno));
         return -1;
     }
-    return 0;
-}
 
-static FILE *lookup_or_open(writer_t *w, const char *name) {
-    size_t idx = hash_name(name) % WRITER_CACHE_SIZE;
-    for (size_t i = 0; i < WRITER_CACHE_SIZE; ++i) {
-        size_t probe = (idx + i) % WRITER_CACHE_SIZE;
-        writer_entry_t *e = &w->entries[probe];
-        if (e->file == NULL && e->name[0] == '\0') {
-            /* Empty slot: open file here. */
-            char path[sizeof w->out_dir + SIG_NAME_MAX + 8];
-            int len = snprintf(path, sizeof path, "%s/%s.csv", w->out_dir, name);
-            if (len < 0 || (size_t)len >= sizeof path) {
-                fprintf(stderr, "writer: path too long for %s\n", name);
-                return NULL;
-            }
-            struct stat st;
-            int newly_created = (stat(path, &st) != 0);
-            FILE *f = fopen(path, "a");
-            if (!f) {
-                fprintf(stderr, "writer: fopen %s: %s\n", path, strerror(errno));
-                return NULL;
-            }
-            if (newly_created) {
-                fwrite(CSV_HEADER, 1, sizeof CSV_HEADER - 1, f);
-            }
-            size_t nn = strlen(name);
-            if (nn >= sizeof e->name) nn = sizeof e->name - 1;
-            memcpy(e->name, name, nn);
-            e->name[nn] = '\0';
-            e->file = f;
-            w->open_count++;
-            return f;
-        }
-        if (e->name[0] != '\0' && strcmp(e->name, name) == 0) {
-            return (FILE *)e->file;
+    size_t cols = 0;
+    for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
+        for (const sig_node_t *node = table->buckets[b]; node; node = node->next) {
+            if (node->sig.placeholder) continue;
+            cols++;
         }
     }
-    fprintf(stderr, "writer: cache full, cannot open %s\n", name);
-    return NULL;
+    if (cols == 0) {
+        fprintf(stderr, "writer: no non-placeholder signals in table\n");
+        return -1;
+    }
+
+    w->col_count = cols;
+    w->col_names = calloc(cols, sizeof *w->col_names);
+    w->col_values = calloc(cols, sizeof *w->col_values);
+    w->col_seen = calloc(cols, sizeof *w->col_seen);
+    if (!w->col_names || !w->col_values || !w->col_seen) {
+        fprintf(stderr, "writer: memory allocation failed\n");
+        writer_close(w);
+        return -1;
+    }
+
+    size_t i = 0;
+    for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
+        for (const sig_node_t *node = table->buckets[b]; node; node = node->next) {
+            if (node->sig.placeholder) continue;
+            w->col_names[i] = strdup(node->sig.name);
+            if (!w->col_names[i]) {
+                fprintf(stderr, "writer: strdup failed\n");
+                writer_close(w);
+                return -1;
+            }
+            i++;
+        }
+    }
+
+    qsort(w->col_names, w->col_count, sizeof *w->col_names, cmp_strptr);
+
+    /* Remove duplicate signal names so CSV columns are unique. */
+    size_t uniq = 0;
+    for (size_t k = 0; k < w->col_count; ++k) {
+        if (uniq == 0 || strcmp(w->col_names[k], w->col_names[uniq - 1]) != 0) {
+            w->col_names[uniq++] = w->col_names[k];
+        } else {
+            free(w->col_names[k]);
+        }
+    }
+    w->col_count = uniq;
+
+    char path[sizeof w->out_dir + 64];
+    int plen = snprintf(path, sizeof path, "%s/%s", w->out_dir, WRITER_SNAPSHOT_FILE);
+    if (plen < 0 || (size_t)plen >= sizeof path) {
+        fprintf(stderr, "writer: telemetry_snapshot path too long\n");
+        writer_close(w);
+        return -1;
+    }
+
+    struct stat st;
+    int write_header = (stat(path, &st) != 0 || st.st_size == 0);
+    w->f = fopen(path, "a");
+    if (!w->f) {
+        fprintf(stderr, "writer: fopen %s: %s\n", path, strerror(errno));
+        writer_close(w);
+        return -1;
+    }
+
+    if (write_header) {
+        if (fprintf(w->f, "timestamp_ns") < 0) {
+            fprintf(stderr, "writer: failed to write header\n");
+            writer_close(w);
+            return -1;
+        }
+        for (size_t c = 0; c < w->col_count; ++c) {
+            if (fprintf(w->f, ",%s", w->col_names[c]) < 0) {
+                fprintf(stderr, "writer: failed to write header column\n");
+                writer_close(w);
+                return -1;
+            }
+        }
+        if (fprintf(w->f, "\n") < 0) {
+            fprintf(stderr, "writer: failed to terminate header\n");
+            writer_close(w);
+            return -1;
+        }
+        fflush(w->f);
+    }
+
+    return 0;
 }
 
 int writer_append(writer_t *w,
                   const signal_def_t *sig,
                   const decoded_value_t *dv) {
-    if (!w || !sig || !dv) return -1;
-    FILE *f = lookup_or_open(w, sig->name);
-    if (!f) return -1;
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    long long ns = (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
-
-    if (fprintf(f, "%lld,%.9g,%s\n", ns, dv->value, dv->raw_hex) < 0) {
-        fprintf(stderr, "writer: fprintf %s: %s\n", sig->name, strerror(errno));
-        return -1;
-    }
-    fflush(f);
+    if (!w || !sig || !dv || !w->f) return -1;
+    ssize_t idx = column_index(w, sig->name);
+    if (idx < 0) return 0; /* ignore unknown columns safely */
+    w->col_values[idx] = dv->value;
+    w->col_seen[idx] = true;
     return 0;
+}
+
+void writer_tick(writer_t *w) {
+    if (!w || !w->f) return;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (!w->have_last_flush) {
+        w->last_flush_mono = now;
+        w->have_last_flush = true;
+        return;
+    }
+    if (mono_diff_ms(&now, &w->last_flush_mono) < (int64_t)w->snapshot_interval_ms)
+        return;
+
+    struct timespec wall;
+    clock_gettime(CLOCK_REALTIME, &wall);
+    long long ts_ns = (long long)wall.tv_sec * 1000000000LL + (long long)wall.tv_nsec;
+
+    if (fprintf(w->f, "%lld", ts_ns) < 0) return;
+    for (size_t c = 0; c < w->col_count; ++c) {
+        if (!w->col_seen[c]) {
+            if (fprintf(w->f, ",") < 0) return;
+        } else {
+            if (fprintf(w->f, ",%.9g", w->col_values[c]) < 0) return;
+        }
+    }
+    if (fprintf(w->f, "\n") < 0) return;
+    fflush(w->f);
+    w->last_flush_mono = now;
 }
 
 void writer_close(writer_t *w) {
     if (!w) return;
-    for (size_t i = 0; i < WRITER_CACHE_SIZE; ++i) {
-        if (w->entries[i].file) {
-            fclose((FILE *)w->entries[i].file);
-            w->entries[i].file = NULL;
-            w->entries[i].name[0] = '\0';
-        }
+    if (w->f) {
+        fflush(w->f);
+        fclose(w->f);
+        w->f = NULL;
     }
-    w->open_count = 0;
+    if (w->col_names) {
+        for (size_t i = 0; i < w->col_count; ++i) {
+            free(w->col_names[i]);
+        }
+        free(w->col_names);
+        w->col_names = NULL;
+    }
+    free(w->col_values);
+    w->col_values = NULL;
+    free(w->col_seen);
+    w->col_seen = NULL;
+    w->col_count = 0;
+    w->have_last_flush = false;
 }

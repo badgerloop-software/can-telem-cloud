@@ -78,6 +78,52 @@ static int measurement_valid(const char *s) {
     return s[0] != '\0';
 }
 
+static int is_fault_signal(const char *name) {
+    if (!name || !name[0]) return 0;
+    char lower[SIG_NAME_MAX * 2];
+    size_t n = strlen(name);
+    if (n >= sizeof lower) n = sizeof lower - 1;
+    for (size_t i = 0; i < n; ++i) lower[i] = (char)tolower((unsigned char)name[i]);
+    lower[n] = '\0';
+    return strstr(lower, "fault") != NULL;
+}
+
+static int influx_post_body(influx_ctx_t *ctx, const char *body, size_t len) {
+    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_URL, ctx->write_url);
+    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_POSTFIELDSIZE, (long)len);
+    CURLcode cr = curl_easy_perform((CURL *)ctx->curl);
+    if (cr != CURLE_OK) {
+        fprintf(stderr, "influx: curl_easy_perform: %s\n", curl_easy_strerror(cr));
+        return -1;
+    }
+    long http = 0;
+    curl_easy_getinfo((CURL *)ctx->curl, CURLINFO_RESPONSE_CODE, &http);
+    if (http != 200 && http != 204) {
+        fprintf(stderr, "influx: HTTP %ld (expected 204)\n", http);
+        return -1;
+    }
+    return 0;
+}
+
+static void influx_write_fault_event(influx_ctx_t *ctx,
+                                     const char *sig_name,
+                                     bool state,
+                                     int64_t ts_ns) {
+    if (!ctx || !ctx->enabled || !sig_name) return;
+    char esc_name[SIG_NAME_MAX * 2];
+    if (lp_escape_tag_value(sig_name, esc_name, sizeof esc_name) == 0) return;
+    char line[512];
+    int n = snprintf(line, sizeof line,
+                     "%s,fault_name=%s state=%s %lld\n",
+                     ctx->fault_measurement,
+                     esc_name,
+                     state ? "true" : "false",
+                     (long long)ts_ns);
+    if (n <= 0 || (size_t)n >= sizeof line) return;
+    (void)influx_post_body(ctx, line, (size_t)n);
+}
+
 static void agg_reset_slot(influx_ctx_t *ctx, size_t i) {
     ctx->slots[i].used      = false;
     ctx->slots[i].bool_any = false;
@@ -154,23 +200,7 @@ static void influx_flush(influx_ctx_t *ctx) {
         goto reset_slots;
     }
 
-    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_URL, ctx->write_url);
-    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt((CURL *)ctx->curl, CURLOPT_POSTFIELDSIZE, (long)off);
-
-    CURLcode cr = curl_easy_perform((CURL *)ctx->curl);
-    if (cr != CURLE_OK) {
-        fprintf(stderr, "influx: curl_easy_perform: %s\n",
-                curl_easy_strerror(cr));
-        free(body);
-        goto reset_slots;
-    }
-
-    long http = 0;
-    curl_easy_getinfo((CURL *)ctx->curl, CURLINFO_RESPONSE_CODE, &http);
-    if (http != 200 && http != 204) {
-        fprintf(stderr, "influx: HTTP %ld (expected 204)\n", http);
-    }
+    (void)influx_post_body(ctx, body, off);
 
     free(body);
 
@@ -219,12 +249,11 @@ int influx_init(influx_ctx_t *ctx, const config_file_t *cf) {
                 sizeof ctx->measurement - 1);
         ctx->measurement[sizeof ctx->measurement - 1] = '\0';
     } else {
-        strcpy(ctx->measurement, "can_telem");
+        strcpy(ctx->measurement, "telemetry_snapshot");
     }
-    if (!measurement_valid(ctx->measurement)) {
-        fprintf(stderr,
-                "influx: influx_measurement must be non-empty "
-                "[A-Za-z0-9_]+\n");
+    strcpy(ctx->fault_measurement, "fault_events");
+    if (!measurement_valid(ctx->measurement) || !measurement_valid(ctx->fault_measurement)) {
+        fprintf(stderr, "influx: invalid measurement name\n");
         return -1;
     }
 
@@ -277,8 +306,8 @@ int influx_init(influx_ctx_t *ctx, const config_file_t *cf) {
     ctx->enabled  = true;
 
     fprintf(stderr,
-            "influx: enabled, interval=%ums, measurement=%s, url=%s\n",
-            ctx->interval_ms, ctx->measurement, ctx->write_url);
+            "influx: enabled, interval=%ums, measurement=%s, fault_measurement=%s, url=%s\n",
+            ctx->interval_ms, ctx->measurement, ctx->fault_measurement, ctx->write_url);
     return 0;
 
 fail_after_curl:
@@ -328,6 +357,49 @@ void influx_accumulate(influx_ctx_t *ctx,
     } else {
         ctx->slots[idx].sum += dv->value;
         ctx->slots[idx].count++;
+    }
+
+    if (is_fault_signal(sig->name)) {
+        size_t fidx = hash_name(sig->name) % INFLUX_AGG_SLOTS;
+        size_t fi;
+        for (fi = 0; fi < INFLUX_AGG_SLOTS; ++fi) {
+            size_t probe = (fidx + fi) % INFLUX_AGG_SLOTS;
+            if (!ctx->fault_slots[probe].used) {
+                fidx = probe;
+                break;
+            }
+            if (strcmp(ctx->fault_slots[probe].name, sig->name) == 0) {
+                fidx = probe;
+                break;
+            }
+        }
+        if (fi < INFLUX_AGG_SLOTS) {
+            if (!ctx->fault_slots[fidx].used) {
+                ctx->fault_slots[fidx].used = true;
+                size_t nl = strlen(sig->name);
+                if (nl >= sizeof ctx->fault_slots[fidx].name)
+                    nl = sizeof ctx->fault_slots[fidx].name - 1;
+                memcpy(ctx->fault_slots[fidx].name, sig->name, nl);
+                ctx->fault_slots[fidx].name[nl] = '\0';
+            }
+            bool state = (dv->value != 0.0);
+            if (!ctx->fault_slots[fidx].have_last_state) {
+                ctx->fault_slots[fidx].have_last_state = true;
+                ctx->fault_slots[fidx].last_state = state;
+                if (state) {
+                    struct timespec wall;
+                    clock_gettime(CLOCK_REALTIME, &wall);
+                    int64_t ts_ns = (int64_t)wall.tv_sec * 1000000000LL + wall.tv_nsec;
+                    influx_write_fault_event(ctx, sig->name, state, ts_ns);
+                }
+            } else if (ctx->fault_slots[fidx].last_state != state) {
+                ctx->fault_slots[fidx].last_state = state;
+                struct timespec wall;
+                clock_gettime(CLOCK_REALTIME, &wall);
+                int64_t ts_ns = (int64_t)wall.tv_sec * 1000000000LL + wall.tv_nsec;
+                influx_write_fault_event(ctx, sig->name, state, ts_ns);
+            }
+        }
     }
 }
 

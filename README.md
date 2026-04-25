@@ -4,7 +4,7 @@ A lightweight C daemon for Raspberry Pi that reads raw CAN frames from a SocketC
 
 | Sink | What it does |
 |------|-------------|
-| **CSV logger** | Appends every decoded sample to a per-signal `.csv` file on a USB drive |
+| **CSV logger** | Writes one unified wide snapshot CSV (`telemetry_snapshot.csv`) every 500ms |
 | **InfluxDB** | Batches samples and uploads to InfluxDB Cloud on a configurable interval |
 | **Serial radio** | Periodically serializes the latest value of every active signal and writes it to a UART radio (e.g. RFD900A) for wireless ground-station reception |
 
@@ -134,7 +134,7 @@ cp can_telem.conf.example can_telem.conf
 ```ini
 # ── Core ────────────────────────────────────────────────────────────
 can_interface          = can0
-format_file            = /home/sunpi/can-telem-cloud/format.json
+format_file            = /home/sunpi/can-telem-cloud/sc-data-format/format.json
 output_dir             = /mnt/usb
 
 # ── InfluxDB Cloud (optional) ───────────────────────────────────────
@@ -176,7 +176,7 @@ CLI flags override values in the config file.
 
 ## CSV output
 
-One file per signal at `<output_dir>/<signal_name>.csv`:
+One unified snapshot file at `<output_dir>/telemetry_snapshot.csv`:
 
 ```
 timestamp_ns,value,raw_hex
@@ -253,7 +253,7 @@ can-telem-cloud/
 │   └── db_watcher.[ch]   — SQLite DB watcher for TX signals
 ├── third_party/
 │   └── cJSON.[ch]        — JSON parser
-├── format.json           — (git submodule: sc-data-format)
+├── sc-data-format/       — git submodule containing format.json and format_exp.md
 ├── can_telem.conf.example
 └── Makefile
 ```
