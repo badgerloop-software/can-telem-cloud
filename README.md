@@ -12,68 +12,41 @@ A lightweight C daemon for Raspberry Pi that reads raw CAN frames from a SocketC
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          STARTUP                                     │
-│                                                                      │
-│  can_telem.conf ──┐                                                  │
-│  CLI flags     ───┼──► Parse config & credentials                   │
-│  INFLUX_TOKEN  ───┘         │                                        │
-│                             ├──► Load format.json → signal hash table│
-│                             ├──► Open SocketCAN (e.g. can0)          │
-│                             ├──► Init CSV writer  → /mnt/usb/        │
-│                             ├──► Init InfluxDB    → libcurl          │
-│                             └──► Init serial radio → /dev/ttyUSB0   │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    ConfFile[/"can_telem.conf"/]
+    CLIFlags[/"CLI flags"/]
+    Token[/"INFLUX_TOKEN"/]
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                        RUNTIME LOOP (poll)                           │
-│                                                                      │
-│   ┌───────────┐    ┌──────────────────┐                              │
-│   │  CAN frame│───►│ decoder_extract() │                             │
-│   │  arrives  │    └────────┬─────────┘                              │
-│   └───────────┘             │                                        │
-│                    ┌────────┴──────────────────┐                     │
-│                    │                           │                     │
-│                    ▼                           ▼                     │
-│          ┌──────────────────┐       ┌─────────────────────┐         │
-│          │  writer_append() │       │  influx_accumulate() │         │
-│          │  → CSV row on    │       │  serial_radio_       │         │
-│          │    USB drive     │       │    accumulate()      │         │
-│          └──────────────────┘       └──────────┬──────────┘         │
-│                                                │                     │
-│   ┌───────────┐                                │                     │
-│   │poll() 200 │    ┌───────────────────────────┘                     │
-│   │ms timeout │───►│                                                 │
-│   └───────────┘    ├──► influx_tick()                                │
-│                    │    Flush batch → InfluxDB Cloud (HTTPS/libcurl) │
-│                    │                                                  │
-│                    └──► serial_radio_tick()                          │
-│                         Flush latest values → /dev/ttyUSB0           │
-│                         Format: <ts_ns>,<signal>,<value>\n           │
-└──────────────────────────────────────────────────────────────────────┘
-```
+    ConfFile & CLIFlags & Token --> ParseConfig[Parse config & credentials]
 
-### Data flow detail
+    subgraph Startup
+        ParseConfig --> LoadFormat[Load format.json\n→ signal hash table]
+        ParseConfig --> OpenCAN[Open SocketCAN\ne.g. can0]
+        ParseConfig --> InitCSV[Init CSV writer\n→ /mnt/usb/]
+        ParseConfig --> InitInflux[Init InfluxDB\n→ libcurl]
+        ParseConfig --> InitRadio[Init serial radio\n→ /dev/ttyUSB0]
+    end
 
-```
-                          CAN frame (SocketCAN)
-                                  │
-                    ┌─────────────▼──────────────┐
-                    │  Lookup CAN ID in hash table│
-                    │  → list of signal_def_t     │
-                    └─────────────┬──────────────┘
-                                  │  (one frame can carry N signals)
-                     ┌────────────┼─────────────┐
-                     ▼            ▼             ▼
-              ┌──────────┐  ┌──────────┐  ┌──────────┐
-              │  writer  │  │  influx  │  │  radio   │
-              │ (always) │  │(optional)│  │(optional)│
-              └────┬─────┘  └────┬─────┘  └────┬─────┘
-                   │             │              │
-            per-signal     batched mean    last value
-             CSV append    → InfluxDB     → UART radio
-           /mnt/usb/*.csv  every N sec   every N ms
+    LoadFormat & OpenCAN & InitCSV & InitInflux & InitRadio --> PollLoop
+
+    subgraph Runtime [Runtime Loop]
+        PollLoop[poll 200ms timeout]
+
+        PollLoop -->|CAN frame arrives| Decode[decoder_extract]
+        Decode --> Lookup[Lookup CAN ID in hash table\n→ signal_def_t list\none frame can carry N signals]
+
+        Lookup --> Writer[writer_append\nper-signal CSV append\n/mnt/usb/*.csv]
+        Lookup --> InfluxAcc[influx_accumulate\nbatched mean]
+        Lookup --> RadioAcc[serial_radio_accumulate\nlast value]
+
+        Writer & InfluxAcc & RadioAcc --> PollLoop
+
+        PollLoop -->|timer expires| InfluxTick[influx_tick\nFlush batch → InfluxDB Cloud\nHTTPS / libcurl\nevery N sec]
+        PollLoop -->|timer expires| RadioTick[serial_radio_tick\nFlush latest values → /dev/ttyUSB0\nFormat: ts_ns,signal,value\nevery N ms]
+
+        InfluxTick & RadioTick --> PollLoop
+    end
 ```
 
 ---
