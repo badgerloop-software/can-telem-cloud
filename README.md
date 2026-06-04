@@ -8,6 +8,15 @@ A lightweight C daemon for Raspberry Pi that reads raw CAN frames from a SocketC
 | **InfluxDB** | Batches samples and uploads to InfluxDB Cloud on a configurable interval |
 | **Serial radio** | Periodically serializes the latest value of every active signal and writes it to a UART radio (e.g. RFD900A) for wireless ground-station reception |
 
+The production mobile app reads the InfluxDB sink as long/tag telemetry:
+
+```text
+telemetry_snapshot,signal=<name> value=<number>
+```
+
+In that contract, the telemetry name comes from the `signal` tag and the
+numeric reading comes from the `value` field.
+
 ---
 
 ## Architecture
@@ -111,17 +120,26 @@ format_file            = /home/sunpi/can-telem-cloud/sc-data-format/format.json
 output_dir             = /mnt/usb
 
 # ── InfluxDB Cloud (optional) ───────────────────────────────────────
+influx_enabled         = true
 influx_url             = https://us-east-1-1.aws.cloud2.influxdata.com
 influx_org             = your-org
 influx_bucket          = telemetry
 influx_token           = your-token
-influx_flush_interval  = 5
+influx_upload_interval_ms = 1000
+influx_measurement     = telemetry_snapshot
 
 # ── Serial radio (optional) ─────────────────────────────────────────
 radio_enabled          = true
 radio_device           = /dev/ttyUSB0
 radio_baud             = 115200
 radio_flush_interval_ms = 1000
+```
+
+The default InfluxDB measurement is `telemetry_snapshot`, which matches the
+mobile app. Each uploaded reading is written as:
+
+```text
+telemetry_snapshot,signal=<signal_name> value=<number>
 ```
 
 ### CLI flags

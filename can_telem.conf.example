@@ -18,7 +18,11 @@ can_interface = can0
 # influx_token = paste-token-here
 # Or omit influx_token and run: export INFLUX_TOKEN=...
 # influx_upload_interval_ms = 1000
-# influx_measurement = can_telem
+# Production mobile app contract:
+#   telemetry_snapshot,signal=<name> value=<number>
+# Keep this unset to use the default telemetry_snapshot measurement, or set it
+# explicitly for clarity.
+# influx_measurement = telemetry_snapshot
 
 # --- Optional: DB-driven CAN transmit (SQLite) ---
 # Enable this to poll values from a SQLite DB and transmit updates on CAN for
