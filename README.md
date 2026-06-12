@@ -105,6 +105,32 @@ sudo timedatectl set-time "2026-06-12 14:00:00"
 sudo hwclock --systohc --utc
 ```
 
+### Internet connectivity (WiFi first, LTE fallback)
+
+InfluxDB uploads require internet at boot. The Pi prefers any saved WiFi profile and falls back to the Quectel EG25-G LTE modem when no known network is in range.
+
+Install the connectivity service:
+
+```bash
+sudo cp deploy/network-connect.default /etc/default/network-connect
+sudo cp deploy/network-connect.service /etc/systemd/system/
+chmod +x deploy/network-connect.sh
+sudo nmcli connection modify lte connection.autoconnect no
+sudo systemctl disable --now sc2-lte.service 2>/dev/null || true
+sudo systemctl daemon-reload
+sudo systemctl enable --now network-connect.service
+```
+
+Saved WiFi profiles (`nmcli connection show`) are tried automatically. LTE uses APN `fast.t-mobile.com` (Tello/T-Mobile) and can be overridden in `/etc/default/network-connect`.
+
+Verify:
+
+```bash
+systemctl status network-connect.service
+ip route show default
+curl -s -o /dev/null -w "%{http_code}\n" https://us-east-1-1.aws.cloud2.influxdata.com/health
+```
+
 ### Bring up CAN interface
 
 ```bash
@@ -279,7 +305,7 @@ can-telem-cloud/
 ├── third_party/
 │   └── cJSON.[ch]        — JSON parser
 ├── sc-data-format/       — git submodule containing format.json and format_exp.md
-├── deploy/               — systemd unit files (RTC sync)
+├── deploy/               — systemd unit files (RTC sync, network connect)
 ├── can_telem.conf.example
 └── Makefile
 ```

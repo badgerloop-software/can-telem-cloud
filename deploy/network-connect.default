@@ -1,0 +1,8 @@
+# Copy to /etc/default/network-connect to override defaults.
+LTE_APN=fast.t-mobile.com
+LTE_CONN_NAME=lte
+WIFI_WAIT_SEC=45
+LTE_WAIT_SEC=60
+PING_TARGET=1.1.1.1
+WIFI_METRIC=100
+LTE_METRIC=600

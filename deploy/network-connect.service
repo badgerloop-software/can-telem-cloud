@@ -1,0 +1,14 @@
+[Unit]
+Description=Prefer saved WiFi, fall back to LTE for internet
+After=NetworkManager.service ModemManager.service
+Before=network-online.target
+Wants=NetworkManager.service ModemManager.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/network-connect
+ExecStart=/home/sunpi/can-telem-cloud/deploy/network-connect.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
