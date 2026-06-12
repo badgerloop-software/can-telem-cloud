@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync hardware RTC from system clock
+After=time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/hwclock --systohc --utc

@@ -68,8 +68,42 @@ flowchart TD
 |-----------|---------|
 | CAN hat | MCP2515 on `can0`, 500 kbps |
 | USB log drive | `ext4` mounted at `/mnt/usb` |
+| RTC module | DS3231 on I2C (`dtoverlay=i2c-rtc,ds3231` in `/boot/firmware/config.txt`) |
 | LTE modem | Quectel EG25-G on `/dev/ttyUSB1–4`; NTP via `systemd-timesyncd` for accurate timestamps |
 | Serial radio | RFD900A on `/dev/ttyUSB0` (Silicon Labs CP2102); 115200 baud, NET\_ID 420 |
+
+### Real-time clock (DS3231)
+
+Telemetry timestamps come from `CLOCK_REALTIME`. On the driverio Pi, a DS3231 RTC keeps time when the vehicle is offline and seeds the system clock on boot.
+
+Timekeeping flow:
+
+1. **Boot:** kernel reads `/dev/rtc0` and sets system time.
+2. **Online:** `systemd-timesyncd` syncs system time over NTP (LTE).
+3. **Write-back:** system time is copied to the RTC hourly and on shutdown so the module stays accurate between power cycles.
+
+Install the RTC sync units shipped in this repo:
+
+```bash
+sudo cp deploy/rtc-sync.service deploy/rtc-sync.timer deploy/rtc-sync-shutdown.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now systemd-timesyncd rtc-sync.timer rtc-sync-shutdown.service
+sudo hwclock --systohc --utc
+```
+
+Verify:
+
+```bash
+timedatectl status          # expect: System clock synchronized: yes
+sudo hwclock --show --utc   # should match date -u within ~1 second
+```
+
+If the RTC has never been set (or lost its battery), set system time first, then write it to the hardware clock:
+
+```bash
+sudo timedatectl set-time "2026-06-12 14:00:00"
+sudo hwclock --systohc --utc
+```
 
 ### Bring up CAN interface
 
@@ -245,6 +279,7 @@ can-telem-cloud/
 ├── third_party/
 │   └── cJSON.[ch]        — JSON parser
 ├── sc-data-format/       — git submodule containing format.json and format_exp.md
+├── deploy/               — systemd unit files (RTC sync)
 ├── can_telem.conf.example
 └── Makefile
 ```
