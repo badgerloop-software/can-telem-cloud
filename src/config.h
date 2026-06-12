@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define CONFIG_VALUE_MAX       512
+#define CONFIG_SIGNAL_LIST_MAX 4096
 #define INFLUX_ORG_MAX         256
 #define INFLUX_BUCKET_MAX      256
 #define INFLUX_TOKEN_MAX       2048
@@ -58,39 +59,37 @@ typedef struct {
     bool     has_radio_baud;
     uint32_t radio_flush_interval_ms;
     bool     has_radio_flush_interval_ms;
+
+    /* --- Role filters --- */
+    char rx_signals[CONFIG_SIGNAL_LIST_MAX];
+    bool has_rx_signals;
+    char tx_signals[CONFIG_SIGNAL_LIST_MAX];
+    bool has_tx_signals;
+
+    /* --- GNSS --- */
+    bool     gnss_enabled;
+    bool     has_gnss_enabled;
+    uint32_t gnss_poll_interval_ms;
+    bool     has_gnss_poll_interval_ms;
+    char     gnss_cache_path[CONFIG_VALUE_MAX];
+    bool     has_gnss_cache_path;
+    char     gnss_lat_signal[CONFIG_VALUE_MAX];
+    bool     has_gnss_lat_signal;
+    char     gnss_lon_signal[CONFIG_VALUE_MAX];
+    bool     has_gnss_lon_signal;
+    char     gnss_elev_signal[CONFIG_VALUE_MAX];
+    bool     has_gnss_elev_signal;
 } config_file_t;
 
 /*
- * Parse a simple key=value config file (UTF-8, one assignment per line).
- * Lines starting with # and blank lines are ignored. Leading/trailing
- * whitespace on keys and values is stripped.
- *
- * Recognized keys (case-insensitive):
- *   output_dir                 — directory for per-signal CSV files
- *   format_file                — path to format.json
- *   can_interface, interface   — SocketCAN interface name (e.g. can0)
- *   influx_enabled             — true/false (default false if omitted)
- *   influx_url                 — InfluxDB Cloud base URL (no trailing path)
- *   influx_org                 — organization name
- *   influx_bucket              — bucket name
- *   influx_token               — API token (optional; INFLUX_TOKEN env if empty)
- *   influx_upload_interval_ms  — cloud flush period (default 1000)
- *   influx_measurement         — line-protocol measurement name [A-Za-z0-9_]+
- *   db_enabled                 — true/false (default false)
- *   db_path                    — sqlite3 file path for DB sourced signals
- *   db_table                   — table containing signal rows (default signal_values)
- *   db_key_column              — key/name column (default signal_key)
- *   db_value_column            — value column (default signal_value)
- *   db_poll_interval_ms        — DB polling period in ms (default 200)
- *   db_can_interface           — CAN interface for TX (default can_interface)
- *   radio_enabled              — true/false (default false)
- *   radio_device               — serial device path (default /dev/ttyUSB0)
- *   radio_baud                 — baud rate: 1200/2400/4800/9600/19200/38400/57600/115200
- *   radio_flush_interval_ms    — serial flush period in ms (default 1000)
- *
- * Returns 0 on success, -1 on failure (missing file when path was
- * required, or I/O error).
+ * Parse simple key=value config.
  */
 int config_file_load(const char *path, config_file_t *out);
+
+/*
+ * Returns 1 if `name` is present as a comma-separated token in `csv_list`,
+ * otherwise 0. Whitespace around tokens is ignored.
+ */
+int config_list_contains(const char *csv_list, const char *name);
 
 #endif /* CAN_TELEM_CONFIG_H */

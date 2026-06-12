@@ -300,6 +300,7 @@ can-telem-cloud/
 │   ├── writer.[ch]       — CSV append sink
 │   ├── influx.[ch]       — InfluxDB Cloud batch upload sink
 │   ├── serial_radio.[ch] — UART radio sink (RFD900A / CP2102)
+│   ├── gnss_reader.[ch]  — GNSS cache reader (lat/lon/elev injection)
 │   ├── encoder.[ch]      — CAN signal encoder (for TX path)
 │   └── db_watcher.[ch]   — SQLite DB watcher for TX signals
 ├── third_party/

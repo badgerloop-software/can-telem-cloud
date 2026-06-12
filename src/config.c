@@ -17,6 +17,25 @@ static void trim_inplace(char *s) {
     }
 }
 
+int config_list_contains(const char *csv_list, const char *name) {
+    if (!csv_list || !name || !name[0]) return 0;
+    const char *p = csv_list;
+    while (*p) {
+        while (*p == ',' || isspace((unsigned char)*p)) ++p;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ',') ++p;
+        const char *end = p;
+        while (end > start && isspace((unsigned char)*(end - 1))) --end;
+        size_t len = (size_t)(end - start);
+        if (len == strlen(name) && strncmp(start, name, len) == 0) {
+            return 1;
+        }
+        if (*p == ',') ++p;
+    }
+    return 0;
+}
+
 static int parse_bool(const char *val, bool *out) {
     if (strcasecmp(val, "true") == 0 || strcasecmp(val, "yes") == 0 ||
         strcasecmp(val, "on") == 0 || strcmp(val, "1") == 0) {
@@ -29,6 +48,20 @@ static int parse_bool(const char *val, bool *out) {
         return 0;
     }
     return -1;
+}
+
+static int parse_u32_range(const char *val, uint32_t *out,
+                           unsigned long min_v, unsigned long max_v,
+                           const char *key) {
+    errno = 0;
+    char *end = NULL;
+    unsigned long v = strtoul(val, &end, 10);
+    if (errno != 0 || end == val || *end != '\0' || v < min_v || v > max_v) {
+        fprintf(stderr, "config: %s: invalid (use %lu..%lu)\n", key, min_v, max_v);
+        return -1;
+    }
+    *out = (uint32_t)v;
+    return 0;
 }
 
 static int set_field(config_file_t *out, const char *key, const char *val) {
@@ -107,16 +140,8 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         return 0;
     }
     if (strcasecmp(key, "influx_upload_interval_ms") == 0) {
-        errno = 0;
-        char *end = NULL;
-        unsigned long v = strtoul(val, &end, 10);
-        if (errno != 0 || end == val || *end != '\0' || v > 86400000UL) {
-            fprintf(stderr,
-                    "config: influx_upload_interval_ms: invalid "
-                    "(use 1..86400000 ms)\n");
+        if (parse_u32_range(val, &out->influx_upload_interval_ms, 1, 86400000, key) != 0)
             return -1;
-        }
-        out->influx_upload_interval_ms     = (uint32_t)v;
         out->has_influx_upload_interval_ms = true;
         return 0;
     }
@@ -176,15 +201,8 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         return 0;
     }
     if (strcasecmp(key, "db_poll_interval_ms") == 0) {
-        errno = 0;
-        char *end = NULL;
-        unsigned long v = strtoul(val, &end, 10);
-        if (errno != 0 || end == val || *end != '\0' || v > 60000UL) {
-            fprintf(stderr,
-                    "config: db_poll_interval_ms: invalid (use 1..60000 ms)\n");
+        if (parse_u32_range(val, &out->db_poll_interval_ms, 1, 60000, key) != 0)
             return -1;
-        }
-        out->db_poll_interval_ms = (uint32_t)v;
         out->has_db_poll_interval_ms = true;
         return 0;
     }
@@ -197,7 +215,6 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         out->has_db_can_interface = true;
         return 0;
     }
-    /* --- Serial radio --- */
     if (strcasecmp(key, "radio_enabled") == 0) {
         bool b;
         if (parse_bool(val, &b) != 0) {
@@ -218,31 +235,90 @@ static int set_field(config_file_t *out, const char *key, const char *val) {
         return 0;
     }
     if (strcasecmp(key, "radio_baud") == 0) {
-        errno = 0;
-        char *end = NULL;
-        unsigned long v = strtoul(val, &end, 10);
-        if (errno != 0 || end == val || *end != '\0' || v > 4000000UL) {
-            fprintf(stderr, "config: radio_baud: invalid baud rate\n");
+        if (parse_u32_range(val, &out->radio_baud, 1200, 4000000, key) != 0)
             return -1;
-        }
-        out->radio_baud     = (uint32_t)v;
         out->has_radio_baud = true;
         return 0;
     }
     if (strcasecmp(key, "radio_flush_interval_ms") == 0) {
-        errno = 0;
-        char *end = NULL;
-        unsigned long v = strtoul(val, &end, 10);
-        if (errno != 0 || end == val || *end != '\0' || v > 86400000UL) {
-            fprintf(stderr,
-                    "config: radio_flush_interval_ms: invalid "
-                    "(use 1..86400000 ms)\n");
+        if (parse_u32_range(val, &out->radio_flush_interval_ms, 1, 86400000, key) != 0)
             return -1;
-        }
-        out->radio_flush_interval_ms     = (uint32_t)v;
         out->has_radio_flush_interval_ms = true;
         return 0;
     }
+
+    if (strcasecmp(key, "rx_signals") == 0) {
+        if (strlen(val) >= sizeof out->rx_signals) {
+            fprintf(stderr, "config: rx_signals value too long\n");
+            return -1;
+        }
+        strcpy(out->rx_signals, val);
+        out->has_rx_signals = true;
+        return 0;
+    }
+    if (strcasecmp(key, "tx_signals") == 0) {
+        if (strlen(val) >= sizeof out->tx_signals) {
+            fprintf(stderr, "config: tx_signals value too long\n");
+            return -1;
+        }
+        strcpy(out->tx_signals, val);
+        out->has_tx_signals = true;
+        return 0;
+    }
+
+    if (strcasecmp(key, "gnss_enabled") == 0) {
+        bool b;
+        if (parse_bool(val, &b) != 0) {
+            fprintf(stderr, "config: gnss_enabled: expected boolean\n");
+            return -1;
+        }
+        out->gnss_enabled = b;
+        out->has_gnss_enabled = true;
+        return 0;
+    }
+    if (strcasecmp(key, "gnss_poll_interval_ms") == 0) {
+        if (parse_u32_range(val, &out->gnss_poll_interval_ms, 100, 60000, key) != 0)
+            return -1;
+        out->has_gnss_poll_interval_ms = true;
+        return 0;
+    }
+    if (strcasecmp(key, "gnss_cache_path") == 0) {
+        if (strlen(val) >= sizeof out->gnss_cache_path) {
+            fprintf(stderr, "config: gnss_cache_path value too long\n");
+            return -1;
+        }
+        strcpy(out->gnss_cache_path, val);
+        out->has_gnss_cache_path = true;
+        return 0;
+    }
+    if (strcasecmp(key, "gnss_lat_signal") == 0) {
+        if (strlen(val) >= sizeof out->gnss_lat_signal) {
+            fprintf(stderr, "config: gnss_lat_signal value too long\n");
+            return -1;
+        }
+        strcpy(out->gnss_lat_signal, val);
+        out->has_gnss_lat_signal = true;
+        return 0;
+    }
+    if (strcasecmp(key, "gnss_lon_signal") == 0) {
+        if (strlen(val) >= sizeof out->gnss_lon_signal) {
+            fprintf(stderr, "config: gnss_lon_signal value too long\n");
+            return -1;
+        }
+        strcpy(out->gnss_lon_signal, val);
+        out->has_gnss_lon_signal = true;
+        return 0;
+    }
+    if (strcasecmp(key, "gnss_elev_signal") == 0) {
+        if (strlen(val) >= sizeof out->gnss_elev_signal) {
+            fprintf(stderr, "config: gnss_elev_signal value too long\n");
+            return -1;
+        }
+        strcpy(out->gnss_elev_signal, val);
+        out->has_gnss_elev_signal = true;
+        return 0;
+    }
+
     fprintf(stderr, "config: unknown key '%s' (ignored)\n", key);
     return 0;
 }
@@ -262,15 +338,14 @@ int config_file_load(const char *path, config_file_t *out) {
     while (fgets(line, sizeof line, f)) {
         ++lineno;
         size_t len = strlen(line);
-        if (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
         trim_inplace(line);
         if (line[0] == '\0' || line[0] == '#') continue;
 
         char *eq = strchr(line, '=');
         if (!eq) {
-            fprintf(stderr, "config: %s:%u: expected key=value\n",
-                    path, lineno);
+            fprintf(stderr, "config: %s:%u: expected key=value\n", path, lineno);
             fclose(f);
             return -1;
         }

@@ -11,6 +11,7 @@
 #include "config.h"
 #include "db_watcher.h"
 #include "format_loader.h"
+#include "gnss_reader.h"
 #include "influx.h"
 #include "serial_radio.h"
 #include "writer.h"
@@ -32,12 +33,7 @@ static void usage(const char *argv0) {
         "  -i   CAN interface name          (default: can0)\n"
         "  -f   path to signal format JSON  (default: ./sc-data-format/format.json)\n"
         "  -o   output directory for CSVs   (default: ./logs)\n"
-        "  -h   show this help\n"
-        "\n"
-        "CLI flags override values from the config file.\n"
-        "InfluxDB Cloud (optional) is configured in the same file; see README.\n"
-        "Serial radio (optional): radio_enabled, radio_device, radio_baud,\n"
-        "  radio_flush_interval_ms in the config file.\n",
+        "  -h   show this help\n",
         argv0);
 }
 
@@ -131,8 +127,20 @@ int main(int argc, char **argv) {
     }
     serial_radio_ctx_t *pradio = radio.enabled ? &radio : NULL;
 
+    gnss_reader_t gnss;
+    memset(&gnss, 0, sizeof gnss);
+    if (gnss_reader_init(&gnss, &cf) != 0) {
+        serial_radio_shutdown(&radio);
+        influx_shutdown(&influx);
+        writer_close(&w);
+        signal_table_free(&table);
+        return 1;
+    }
+    gnss_reader_t *pgnss = gnss.enabled ? &gnss : NULL;
+
     int fd = can_reader_open(iface);
     if (fd < 0) {
+        gnss_reader_shutdown(&gnss);
         serial_radio_shutdown(&radio);
         influx_shutdown(&influx);
         writer_close(&w);
@@ -147,6 +155,7 @@ int main(int argc, char **argv) {
     int db_rc = db_watcher_start(&dbw, &cf, &table, iface, &g_running);
     if (db_rc < 0) {
         close(fd);
+        gnss_reader_shutdown(&gnss);
         serial_radio_shutdown(&radio);
         influx_shutdown(&influx);
         writer_close(&w);
@@ -160,11 +169,12 @@ int main(int argc, char **argv) {
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    int rc = can_reader_loop(fd, &table, &w, pinflux, pradio, &g_running);
+    int rc = can_reader_loop(fd, &table, &w, pinflux, pradio, pgnss, &cf, &g_running);
 
     fprintf(stderr, "can_telem: shutting down\n");
     close(fd);
     db_watcher_stop(&dbw);
+    gnss_reader_shutdown(&gnss);
     serial_radio_shutdown(&radio);
     influx_shutdown(&influx);
     writer_close(&w);

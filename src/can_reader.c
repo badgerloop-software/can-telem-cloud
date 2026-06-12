@@ -15,7 +15,57 @@
 
 #include "decoder.h"
 
-#define PLACEHOLDER_CAN_ID 0xFFFu
+static int rx_allowed(const config_file_t *cf, const char *sig_name) {
+    if (!cf || !cf->has_rx_signals || cf->rx_signals[0] == '\0') return 1;
+    return config_list_contains(cf->rx_signals, sig_name);
+}
+
+static const signal_def_t *find_signal_by_name(const signal_table_t *table, const char *name) {
+    if (!table || !name || !name[0]) return NULL;
+    for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
+        for (const sig_node_t *n = table->buckets[b]; n; n = n->next) {
+            if (strcmp(n->sig.name, name) == 0) return &n->sig;
+        }
+    }
+    return NULL;
+}
+
+static void inject_one_signal(writer_t *w,
+                              influx_ctx_t *influx,
+                              serial_radio_ctx_t *radio,
+                              const config_file_t *cf,
+                              const signal_def_t *sig,
+                              double value) {
+    if (!sig || !rx_allowed(cf, sig->name)) return;
+    decoded_value_t dv;
+    memset(&dv, 0, sizeof dv);
+    dv.value = value;
+    strcpy(dv.raw_hex, "gnss");
+    writer_append(w, sig, &dv);
+    if (influx) influx_accumulate(influx, sig, &dv);
+    serial_radio_accumulate(radio, sig, &dv);
+}
+
+static void maybe_inject_gnss(const signal_table_t *table,
+                              writer_t *w,
+                              influx_ctx_t *influx,
+                              serial_radio_ctx_t *radio,
+                              gnss_reader_t *gnss,
+                              const config_file_t *cf,
+                              const signal_def_t *lat_sig,
+                              const signal_def_t *lon_sig,
+                              const signal_def_t *elev_sig) {
+    (void)table;
+    if (!gnss || !gnss->enabled) return;
+    (void)gnss_reader_tick(gnss);
+
+    double lat = 0.0, lon = 0.0, elev = 0.0;
+    if (!gnss_reader_get_fix(gnss, &lat, &lon, &elev)) return;
+
+    inject_one_signal(w, influx, radio, cf, lat_sig, lat);
+    inject_one_signal(w, influx, radio, cf, lon_sig, lon);
+    inject_one_signal(w, influx, radio, cf, elev_sig, elev);
+}
 
 int can_reader_open(const char *ifname) {
     if (!ifname) return -1;
@@ -45,7 +95,6 @@ int can_reader_open(const char *ifname) {
         close(s);
         return -1;
     }
-
     return s;
 }
 
@@ -54,8 +103,20 @@ int can_reader_loop(int fd,
                     writer_t *w,
                     influx_ctx_t *influx,
                     serial_radio_ctx_t *radio,
+                    gnss_reader_t *gnss,
+                    const config_file_t *cf,
                     volatile sig_atomic_t *running) {
     if (fd < 0 || !table || !w || !running) return -1;
+
+    const char *lat_name = (cf && cf->has_gnss_lat_signal && cf->gnss_lat_signal[0])
+        ? cf->gnss_lat_signal : "lat";
+    const char *lon_name = (cf && cf->has_gnss_lon_signal && cf->gnss_lon_signal[0])
+        ? cf->gnss_lon_signal : "lon";
+    const char *elev_name = (cf && cf->has_gnss_elev_signal && cf->gnss_elev_signal[0])
+        ? cf->gnss_elev_signal : "elev";
+    const signal_def_t *lat_sig = find_signal_by_name(table, lat_name);
+    const signal_def_t *lon_sig = find_signal_by_name(table, lon_name);
+    const signal_def_t *elev_sig = find_signal_by_name(table, elev_name);
 
     struct can_frame frame;
     while (*running) {
@@ -68,6 +129,7 @@ int can_reader_loop(int fd,
             return -1;
         }
         if (pr == 0) {
+            maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
             writer_tick(w);
             if (influx) influx_tick(influx);
             serial_radio_tick(radio);
@@ -96,6 +158,7 @@ int can_reader_loop(int fd,
         for (; node; node = node->next) {
             if (node->sig.can_id != id) continue;
             if (node->sig.placeholder) continue;
+            if (!rx_allowed(cf, node->sig.name)) continue;
 
             decoded_value_t dv;
             if (decoder_extract(&node->sig, frame.data,
@@ -106,10 +169,11 @@ int can_reader_loop(int fd,
             if (influx) influx_accumulate(influx, &node->sig, &dv);
             serial_radio_accumulate(radio, &node->sig, &dv);
         }
+
+        maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
         writer_tick(w);
         if (influx) influx_tick(influx);
         serial_radio_tick(radio);
     }
-
     return 0;
 }
