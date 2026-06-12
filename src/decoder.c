@@ -85,22 +85,12 @@ int decoder_extract(const signal_def_t *sig,
                 double v; memcpy(&v, raw, 8);
                 out->value = v;
             } else if (nb == 2) {
-                /* 2-byte floats are fixed-point values scaled across the
-                 * signal's nominal min/max range (see encode_signal.py). */
+                /* Some entries in format.json declare 'float' with 2 bytes
+                 * (e.g. pack_voltage). Treat as unsigned 16-bit scalar. */
                 uint16_t v; memcpy(&v, raw, 2);
-                double span = sig->nom_max - sig->nom_min;
-                if (span > 0.0) {
-                    out->value = sig->nom_min + ((double)v / 65535.0) * span;
-                } else {
-                    out->value = (double)v;
-                }
+                out->value = (double)v;
             } else { /* nb == 1 */
-                double span = sig->nom_max - sig->nom_min;
-                if (span > 0.0) {
-                    out->value = sig->nom_min + ((double)raw[0] / 255.0) * span;
-                } else {
-                    out->value = (double)raw[0];
-                }
+                out->value = (double)raw[0];
             }
             return 0;
         }
