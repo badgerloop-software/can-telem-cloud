@@ -165,8 +165,8 @@ static void influx_flush(influx_ctx_t *ctx) {
             if (!ctx->slots[i].bool_seen) continue;
             bool v = ctx->slots[i].bool_any;
             n = snprintf(line, sizeof line,
-                         "%s,signal=%s value=%s %" PRId64 "\n",
-                         ctx->measurement, esc_name, v ? "true" : "false", ts_ns);
+                         "%s,signal=%s value=%.1f %" PRId64 "\n",
+                         ctx->measurement, esc_name, v ? 1.0 : 0.0, ts_ns);
         } else {
             if (ctx->slots[i].count == 0) continue;
             double mean = ctx->slots[i].sum / (double)ctx->slots[i].count;
