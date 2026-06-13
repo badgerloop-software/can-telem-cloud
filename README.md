@@ -24,10 +24,10 @@ If you are new to embedded telemetry, start here:
 
 ```mermaid
 flowchart LR
-  CAN[CAN bus\n(sensor messages)] --> Daemon[can_telem\n(decode & route)]
-  Daemon --> USB[USB drive\n(spreadsheet logs)]
-  Daemon --> Cloud[InfluxDB Cloud]
-  Daemon --> Radio[Serial radio\n(wireless stream)]
+  CAN["CAN bus<br/>(sensor messages)"] --> Daemon["can_telem<br/>(decode and route)"]
+  Daemon --> USB["USB drive<br/>(spreadsheet logs)"]
+  Daemon --> Cloud["InfluxDB Cloud"]
+  Daemon --> Radio["Serial radio<br/>(wireless stream)"]
 ```
 
 | Piece | Role |
@@ -48,35 +48,46 @@ flowchart TD
     CLIFlags[/"CLI flags"/]
     Token[/"INFLUX_TOKEN"/]
 
-    ConfFile & CLIFlags & Token --> ParseConfig[Parse config & credentials]
+    ConfFile --> ParseConfig
+    CLIFlags --> ParseConfig
+    Token --> ParseConfig
+    ParseConfig["Parse config and credentials"]
 
     subgraph Startup
-        ParseConfig --> LoadFormat[Load format.json\n→ signal hash table]
-        ParseConfig --> OpenCAN[Open SocketCAN\ne.g. can0]
-        ParseConfig --> InitCSV[Init CSV writer\n→ /mnt/usb/{DD-Mon-YYYY}/]
-        ParseConfig --> InitInflux[Init InfluxDB\n→ libcurl]
-        ParseConfig --> InitRadio[Init serial radio\n→ /dev/ttyAMA0 or ttyUSB0]
+        ParseConfig --> LoadFormat["Load format.json<br/>signal hash table"]
+        ParseConfig --> OpenCAN["Open SocketCAN<br/>e.g. can0"]
+        ParseConfig --> InitCSV["Init CSV writer<br/>/mnt/usb/DD-Mon-YYYY/"]
+        ParseConfig --> InitInflux["Init InfluxDB<br/>libcurl"]
+        ParseConfig --> InitRadio["Init serial radio<br/>ttyAMA0 or ttyUSB0"]
     end
 
-    LoadFormat & OpenCAN & InitCSV & InitInflux & InitRadio --> PollLoop
+    LoadFormat --> PollLoop
+    OpenCAN --> PollLoop
+    InitCSV --> PollLoop
+    InitInflux --> PollLoop
+    InitRadio --> PollLoop
 
     subgraph Runtime [Runtime Loop]
-        PollLoop[poll 200ms timeout]
+        PollLoop["poll 200ms timeout"]
 
         PollLoop -->|CAN frame arrives| Decode[decoder_extract]
-        Decode --> Lookup[Lookup CAN ID in hash table\n→ signal_def_t list\none frame can carry N signals]
+        Decode --> Lookup["Lookup CAN ID<br/>decode signals"]
 
-        Lookup --> Writer[writer_append\nupdate in-memory snapshot]
-        Lookup --> InfluxAcc[influx_accumulate\nbatched mean]
-        Lookup --> RadioAcc[serial_radio_accumulate\nlast value]
+        Lookup --> Writer["writer_append<br/>update snapshot"]
+        Lookup --> InfluxAcc["influx_accumulate<br/>batched mean"]
+        Lookup --> RadioAcc["serial_radio_accumulate<br/>last value"]
 
-        Writer & InfluxAcc & RadioAcc --> PollLoop
+        Writer --> PollLoop
+        InfluxAcc --> PollLoop
+        RadioAcc --> PollLoop
 
-        PollLoop -->|timer expires| WriterTick[writer_tick\nFlush wide CSV row\nevery 500 ms]
-        PollLoop -->|timer expires| InfluxTick[influx_tick\nFlush batch → InfluxDB Cloud]
-        PollLoop -->|timer expires| RadioTick[serial_radio_tick\nFlush latest values → UART\nFormat: ts_ns,signal,value]
+        PollLoop -->|timer expires| WriterTick["writer_tick<br/>flush wide CSV"]
+        PollLoop -->|timer expires| InfluxTick["influx_tick<br/>upload to InfluxDB"]
+        PollLoop -->|timer expires| RadioTick["serial_radio_tick<br/>flush to UART"]
 
-        WriterTick & InfluxTick & RadioTick --> PollLoop
+        WriterTick --> PollLoop
+        InfluxTick --> PollLoop
+        RadioTick --> PollLoop
     end
 ```
 
@@ -118,65 +129,6 @@ Verify:
 ```bash
 timedatectl status          # expect: System clock synchronized: yes
 sudo hwclock --show --utc   # should match date -u within ~1 second
-```
-
-### Internet connectivity (WiFi first, LTE fallback)
-
-InfluxDB uploads require internet at boot. The Pi prefers any saved WiFi profile and falls back to the Quectel EG25-G LTE modem when no known network is in range.
-
-Install the connectivity service:
-
-```bash
-sudo cp deploy/network-connect.default /etc/default/network-connect
-sudo cp deploy/network-connect.service /etc/systemd/system/
-chmod +x deploy/network-connect.sh
-sudo nmcli connection modify lte connection.autoconnect no
-sudo systemctl disable --now sc2-lte.service 2>/dev/null || true
-sudo systemctl daemon-reload
-sudo systemctl enable --now network-connect.service
-```
-
-Saved WiFi profiles (`nmcli connection show`) are tried automatically. LTE uses APN `fast.t-mobile.com` (Tello/T-Mobile) and can be overridden in `/etc/default/network-connect`.
-
-Verify:
-
-```bash
-systemctl status network-connect.service
-ip route show default
-curl -s -o /dev/null -w "%{http_code}\n" https://us-east-1-1.aws.cloud2.influxdata.com/health
-```
-
-### Real-time clock (DS3231)
-
-Telemetry timestamps come from `CLOCK_REALTIME`. On the driverio Pi, a DS3231 RTC keeps time when the vehicle is offline and seeds the system clock on boot.
-
-Timekeeping flow:
-
-1. **Boot:** kernel reads `/dev/rtc0` and sets system time.
-2. **Online:** `systemd-timesyncd` syncs system time over NTP (LTE).
-3. **Write-back:** system time is copied to the RTC hourly and on shutdown so the module stays accurate between power cycles.
-
-Install the RTC sync units shipped in this repo:
-
-```bash
-sudo cp deploy/rtc-sync.service deploy/rtc-sync.timer deploy/rtc-sync-shutdown.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now systemd-timesyncd rtc-sync.timer rtc-sync-shutdown.service
-sudo hwclock --systohc --utc
-```
-
-Verify:
-
-```bash
-timedatectl status          # expect: System clock synchronized: yes
-sudo hwclock --show --utc   # should match date -u within ~1 second
-```
-
-If the RTC has never been set (or lost its battery), set system time first, then write it to the hardware clock:
-
-```bash
-sudo timedatectl set-time "2026-06-12 14:00:00"
-sudo hwclock --systohc --utc
 ```
 
 ### Internet connectivity (WiFi first, LTE fallback)
@@ -275,13 +227,6 @@ gnss_poll_interval_ms  = 1000
 ```
 
 The default InfluxDB measurement is `telemetry_snapshot`, which matches the mobile app. Each uploaded reading is written as:
-
-```text
-telemetry_snapshot,signal=<signal_name> value=<number>
-```
-
-The default InfluxDB measurement is `telemetry_snapshot`, which matches the
-mobile app. Each uploaded reading is written as:
 
 ```text
 telemetry_snapshot,signal=<signal_name> value=<number>
@@ -423,7 +368,7 @@ can-telem-cloud/
 │   └── db_watcher.[ch]   — SQLite DB watcher for TX signals
 ├── third_party/
 │   └── cJSON.[ch]        — JSON parser
-├── sc-data-format/       — git submodule containing format.json and format_exp.md
+├── sc-data-format/       — git submodule containing format.json
 ├── deploy/               — systemd unit files (RTC sync, network connect, can-telem)
 ├── can_telem.conf.example
 └── Makefile
