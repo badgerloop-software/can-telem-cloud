@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync hardware RTC on shutdown
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
+Conflicts=shutdown.target reboot.target halt.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/hwclock --systohc --utc
+TimeoutSec=30
+RemainAfterExit=yes
+
+[Install]
+WantedBy=halt.target reboot.target shutdown.target

@@ -8,6 +8,15 @@ A lightweight C daemon for Raspberry Pi that reads raw CAN frames from a SocketC
 | **InfluxDB** | Batches samples and uploads to InfluxDB Cloud on a configurable interval |
 | **Serial radio** | Periodically serializes the latest value of every active signal and writes it to a UART radio (e.g. RFD900A) for wireless ground-station reception |
 
+The production mobile app reads the InfluxDB sink as long/tag telemetry:
+
+```text
+telemetry_snapshot,signal=<name> value=<number>
+```
+
+In that contract, the telemetry name comes from the `signal` tag and the
+numeric reading comes from the `value` field.
+
 ---
 
 ## Architecture
@@ -59,8 +68,68 @@ flowchart TD
 |-----------|---------|
 | CAN hat | MCP2515 on `can0`, 500 kbps |
 | USB log drive | `ext4` mounted at `/mnt/usb` |
+| RTC module | DS3231 on I2C (`dtoverlay=i2c-rtc,ds3231` in `/boot/firmware/config.txt`) |
 | LTE modem | Quectel EG25-G on `/dev/ttyUSB1–4`; NTP via `systemd-timesyncd` for accurate timestamps |
 | Serial radio | RFD900A on `/dev/ttyUSB0` (Silicon Labs CP2102); 115200 baud, NET\_ID 420 |
+
+### Real-time clock (DS3231)
+
+Telemetry timestamps come from `CLOCK_REALTIME`. On the driverio Pi, a DS3231 RTC keeps time when the vehicle is offline and seeds the system clock on boot.
+
+Timekeeping flow:
+
+1. **Boot:** kernel reads `/dev/rtc0` and sets system time.
+2. **Online:** `systemd-timesyncd` syncs system time over NTP (LTE).
+3. **Write-back:** system time is copied to the RTC hourly and on shutdown so the module stays accurate between power cycles.
+
+Install the RTC sync units shipped in this repo:
+
+```bash
+sudo cp deploy/rtc-sync.service deploy/rtc-sync.timer deploy/rtc-sync-shutdown.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now systemd-timesyncd rtc-sync.timer rtc-sync-shutdown.service
+sudo hwclock --systohc --utc
+```
+
+Verify:
+
+```bash
+timedatectl status          # expect: System clock synchronized: yes
+sudo hwclock --show --utc   # should match date -u within ~1 second
+```
+
+If the RTC has never been set (or lost its battery), set system time first, then write it to the hardware clock:
+
+```bash
+sudo timedatectl set-time "2026-06-12 14:00:00"
+sudo hwclock --systohc --utc
+```
+
+### Internet connectivity (WiFi first, LTE fallback)
+
+InfluxDB uploads require internet at boot. The Pi prefers any saved WiFi profile and falls back to the Quectel EG25-G LTE modem when no known network is in range.
+
+Install the connectivity service:
+
+```bash
+sudo cp deploy/network-connect.default /etc/default/network-connect
+sudo cp deploy/network-connect.service /etc/systemd/system/
+chmod +x deploy/network-connect.sh
+sudo nmcli connection modify lte connection.autoconnect no
+sudo systemctl disable --now sc2-lte.service 2>/dev/null || true
+sudo systemctl daemon-reload
+sudo systemctl enable --now network-connect.service
+```
+
+Saved WiFi profiles (`nmcli connection show`) are tried automatically. LTE uses APN `fast.t-mobile.com` (Tello/T-Mobile) and can be overridden in `/etc/default/network-connect`.
+
+Verify:
+
+```bash
+systemctl status network-connect.service
+ip route show default
+curl -s -o /dev/null -w "%{http_code}\n" https://us-east-1-1.aws.cloud2.influxdata.com/health
+```
 
 ### Bring up CAN interface
 
@@ -111,17 +180,26 @@ format_file            = /home/sunpi/can-telem-cloud/sc-data-format/format.json
 output_dir             = /mnt/usb
 
 # ── InfluxDB Cloud (optional) ───────────────────────────────────────
+influx_enabled         = true
 influx_url             = https://us-east-1-1.aws.cloud2.influxdata.com
 influx_org             = your-org
 influx_bucket          = telemetry
 influx_token           = your-token
-influx_flush_interval  = 5
+influx_upload_interval_ms = 1000
+influx_measurement     = telemetry_snapshot
 
 # ── Serial radio (optional) ─────────────────────────────────────────
 radio_enabled          = true
 radio_device           = /dev/ttyUSB0
 radio_baud             = 115200
 radio_flush_interval_ms = 1000
+```
+
+The default InfluxDB measurement is `telemetry_snapshot`, which matches the
+mobile app. Each uploaded reading is written as:
+
+```text
+telemetry_snapshot,signal=<signal_name> value=<number>
 ```
 
 ### CLI flags
@@ -222,11 +300,13 @@ can-telem-cloud/
 │   ├── writer.[ch]       — CSV append sink
 │   ├── influx.[ch]       — InfluxDB Cloud batch upload sink
 │   ├── serial_radio.[ch] — UART radio sink (RFD900A / CP2102)
+│   ├── gnss_reader.[ch]  — GNSS cache reader (lat/lon/elev injection)
 │   ├── encoder.[ch]      — CAN signal encoder (for TX path)
 │   └── db_watcher.[ch]   — SQLite DB watcher for TX signals
 ├── third_party/
 │   └── cJSON.[ch]        — JSON parser
 ├── sc-data-format/       — git submodule containing format.json and format_exp.md
+├── deploy/               — systemd unit files (RTC sync, network connect)
 ├── can_telem.conf.example
 └── Makefile
 ```

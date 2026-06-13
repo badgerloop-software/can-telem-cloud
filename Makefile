@@ -13,6 +13,7 @@ SRC = \
     src/db_watcher.c \
     src/writer.c \
     src/serial_radio.c \
+    src/gnss_reader.c \
     third_party/cJSON.c
 
 TARGET = can_telem

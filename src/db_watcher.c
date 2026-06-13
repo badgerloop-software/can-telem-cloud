@@ -163,6 +163,12 @@ static struct db_frame_cache *frame_for_can_id(db_watcher_t *ctx, uint32_t id) {
     return NULL;
 }
 
+
+static int tx_allowed(const config_file_t *cf, const char *sig_name) {
+    if (!cf || !cf->has_tx_signals || cf->tx_signals[0] == '\0') return 1;
+    return config_list_contains(cf->tx_signals, sig_name);
+}
+
 static void sleep_ms(uint32_t ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
@@ -304,7 +310,7 @@ int db_watcher_start(db_watcher_t *ctx,
 
     for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
         for (const sig_node_t *n = table->buckets[b]; n; n = n->next) {
-            if (n->sig.source == SIG_SOURCE_DB && !n->sig.placeholder && n->sig.tx_on_change) {
+            if (n->sig.source == SIG_SOURCE_DB && !n->sig.placeholder && n->sig.tx_on_change && tx_allowed(cf, n->sig.name)) {
                 ctx->signal_count++;
             }
         }
@@ -317,7 +323,7 @@ int db_watcher_start(db_watcher_t *ctx,
     size_t idx = 0;
     for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
         for (const sig_node_t *n = table->buckets[b]; n; n = n->next) {
-            if (n->sig.source == SIG_SOURCE_DB && !n->sig.placeholder && n->sig.tx_on_change) {
+            if (n->sig.source == SIG_SOURCE_DB && !n->sig.placeholder && n->sig.tx_on_change && tx_allowed(cf, n->sig.name)) {
                 ctx->signals[idx].sig = &n->sig;
                 idx++;
             }

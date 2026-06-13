@@ -18,7 +18,11 @@ can_interface = can0
 # influx_token = paste-token-here
 # Or omit influx_token and run: export INFLUX_TOKEN=...
 # influx_upload_interval_ms = 1000
-# influx_measurement = can_telem
+# Production mobile app contract:
+#   telemetry_snapshot,signal=<name> value=<number>
+# Keep this unset to use the default telemetry_snapshot measurement, or set it
+# explicitly for clarity.
+# influx_measurement = telemetry_snapshot
 
 # --- Optional: DB-driven CAN transmit (SQLite) ---
 # Enable this to poll values from a SQLite DB and transmit updates on CAN for
@@ -42,3 +46,17 @@ can_interface = can0
 # radio_device = /dev/ttyUSB0
 # radio_baud = 9600
 # radio_flush_interval_ms = 1000
+
+# --- Optional: signal role filters (without editing sc-data-format) ---
+# Comma-separated signal names. Leave empty/missing to allow all.
+# rx_signals = pack_voltage,pack_current,soc,lat,lon,elev
+# tx_signals = torque_cmd,drive_mode
+
+# --- Optional: GNSS merge ---
+# Pull lat/lon/elev from /run/can_telem/gnss.json (written by gnss_service.py)
+# gnss_enabled = true
+# gnss_poll_interval_ms = 1000
+# gnss_cache_path = /run/can_telem/gnss.json
+# gnss_lat_signal = lat
+# gnss_lon_signal = lon
+# gnss_elev_signal = elev

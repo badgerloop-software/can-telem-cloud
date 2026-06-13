@@ -58,7 +58,6 @@ int writer_init(writer_t *w, const char *out_dir, const signal_table_t *table) {
     size_t cols = 0;
     for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
         for (const sig_node_t *node = table->buckets[b]; node; node = node->next) {
-            if (node->sig.placeholder) continue;
             cols++;
         }
     }
@@ -80,7 +79,6 @@ int writer_init(writer_t *w, const char *out_dir, const signal_table_t *table) {
     size_t i = 0;
     for (size_t b = 0; b < SIG_TABLE_BUCKETS; ++b) {
         for (const sig_node_t *node = table->buckets[b]; node; node = node->next) {
-            if (node->sig.placeholder) continue;
             w->col_names[i] = strdup(node->sig.name);
             if (!w->col_names[i]) {
                 fprintf(stderr, "writer: strdup failed\n");
