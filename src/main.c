@@ -147,8 +147,8 @@ int main(int argc, char **argv) {
         signal_table_free(&table);
         return 1;
     }
-    fprintf(stderr, "can_telem: listening on %s, writing snapshots to %s/%s\n",
-            iface, outdir, WRITER_SNAPSHOT_FILE);
+    fprintf(stderr, "can_telem: listening on %s, writing snapshots under %s/{DD-Mon-YYYY}/\n",
+            iface, outdir);
 
     db_watcher_t dbw;
     memset(&dbw, 0, sizeof dbw);
