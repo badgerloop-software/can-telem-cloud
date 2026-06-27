@@ -12,14 +12,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download official Raspberry Pi OS Lite Base Image
+      - name: Resolve Latest Raspberry Pi OS URL
+        id: resolve-url
         run: |
           echo "Finding latest official Raspberry Pi OS Lite..."
           LATEST_DIR=$(curl -s https://downloads.raspberrypi.com/raspios_lite_arm64/images/ | grep -oE 'raspios_lite_arm64-[0-9]{4}-[0-9]{2}-[0-9]{2}/' | uniq | tail -n 1)
           IMG_NAME=$(curl -s "https://downloads.raspberrypi.com/raspios_lite_arm64/images/${LATEST_DIR}" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}-raspios-[a-z]+-arm64-lite.img.xz' | head -n 1)
-          echo "Downloading ${IMG_NAME} from ${LATEST_DIR}..."
-          curl -L -o rpi_base.img.xz "https://downloads.raspberrypi.com/raspios_lite_arm64/images/${LATEST_DIR}${IMG_NAME}"
-          xz -d rpi_base.img.xz
+          URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/${LATEST_DIR}${IMG_NAME}"
+          echo "url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Setup QEMU for ARM Emulation
         uses: docker/setup-qemu-action@v3
@@ -27,7 +27,7 @@ jobs:
       - name: Modify Raspberry Pi Image
         uses: dtcooper/rpi-image-modifier@v1
         with:
-          image-path: rpi_base.img
+          base-image-url: ${{ steps.resolve-url.outputs.url }}
           script-path: deploy/image-setup.sh
           env-vars: PI_USERNAME,PI_PASSWORD
         env:
@@ -36,7 +36,7 @@ jobs:
 
       - name: Compress Custom Image
         run: |
-          mv rpi_base.img driverio-custom-raspios-lite.img
+          mv rpi-os-modified.img driverio-custom-raspios-lite.img
           xz -9 driverio-custom-raspios-lite.img
 
       - name: Upload Image to GitHub Release
