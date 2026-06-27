@@ -27,8 +27,8 @@ jobs:
       - name: Modify Raspberry Pi Image
         uses: dtcooper/rpi-image-modifier@v1
         with:
-          image: rpi_base.img
-          script: deploy/image-setup.sh
+          image-path: rpi_base.img
+          script-path: deploy/image-setup.sh
           env-vars: PI_USERNAME,PI_PASSWORD
         env:
           PI_USERNAME: ${{ secrets.PI_USERNAME }}
