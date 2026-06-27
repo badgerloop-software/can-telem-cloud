@@ -34,6 +34,25 @@ get_modem_index() {
     mmcli -L 2>/dev/null | sed -n 's/.*Modem\/\([0-9]\+\).*/\1/p' | head -1
 }
 
+lte_usb_up() {
+    ip link show usb0 >/dev/null 2>&1 || return 1
+    ip link show usb0 | grep -q 'state UP' || return 1
+    ip -4 addr show dev usb0 2>/dev/null | grep -q 'inet ' || return 1
+    return 0
+}
+
+get_lte_gateway() {
+    local gw
+    gw=$(ip -4 route show dev usb0 2>/dev/null | awk '/^default / { print $3; exit }')
+    if [[ -n "$gw" ]]; then
+        echo "$gw"
+        return 0
+    fi
+    if lte_usb_up; then
+        ip -4 -o addr show dev usb0 | awk '{split($4,a,"/"); split(a[1],b,"."); printf "%s.%s.%s.1\n", b[1], b[2], b[3]}'
+    fi
+}
+
 wifi_has_internet() {
     if ! nmcli -t -f DEVICE,STATE device status | awk -F: '$1=="wlan0" && $2=="connected" { found=1 } END { exit !found }'; then
         return 1
@@ -42,10 +61,16 @@ wifi_has_internet() {
 }
 
 lte_has_internet() {
-    if ! nmcli -t -f DEVICE,STATE device status | awk -F: '$1=="usb0" && $2=="connected" { found=1 } END { exit !found }'; then
-        return 1
-    fi
+    lte_usb_up || return 1
     ping -I usb0 -c1 -W3 "$PING_TARGET" >/dev/null 2>&1
+}
+
+ensure_lte_default_route() {
+    local lte_gw
+    lte_gw=$(get_lte_gateway)
+    [[ -n "$lte_gw" ]] || return 1
+    ip route replace default via "$lte_gw" dev usb0 metric "$WIFI_METRIC" 2>/dev/null || true
+    return 0
 }
 
 set_route_metrics() {
@@ -75,7 +100,7 @@ apply_default_route() {
     local wifi_gw lte_gw
 
     wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
-    lte_gw=$(ip -4 route show dev usb0 2>/dev/null | awk '/^default / { print $3; exit }')
+    lte_gw=$(get_lte_gateway)
 
     if [[ "$prefer_wifi" == "1" && -n "$wifi_gw" ]]; then
         ip route replace default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC"
@@ -158,10 +183,10 @@ connect_lte() {
             mmcli -m "$modem" --simple-connect="apn=${LTE_APN}" 2>/dev/null || true
     fi
 
-    nmcli connection up "$LTE_CONN_NAME" ifname usb0 2>/dev/null ||
-        nmcli device connect usb0 2>/dev/null || true
-
     for i in $(seq 1 "$LTE_WAIT_SEC"); do
+        if lte_usb_up; then
+            ensure_lte_default_route || true
+        fi
         if lte_has_internet; then
             return 0
         fi
@@ -193,7 +218,6 @@ main() {
     if connect_lte; then
         log "using LTE"
         set_route_metrics 0
-        nmcli connection up "$LTE_CONN_NAME" 2>/dev/null || true
         apply_default_route 0 || true
         exit 0
     fi
