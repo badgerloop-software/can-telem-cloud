@@ -1,0 +1,1 @@
+ACTION=="add|change", KERNEL=="usb0", ENV{ID_MM_PORT_IGNORE}="1"
