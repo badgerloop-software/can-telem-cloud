@@ -133,28 +133,41 @@ sudo hwclock --show --utc   # should match date -u within ~1 second
 
 ### Internet connectivity (WiFi first, LTE fallback)
 
-InfluxDB uploads require internet at boot. The Pi prefers any saved WiFi profile and falls back to the Quectel EG25-G LTE modem when no known network is in range.
+The Pi is configured to automatically manage both WiFi and LTE connections natively using NetworkManager, preferring WiFi when available.
 
-Install the connectivity service:
+Since the LTE modem runs in ECM (Ethernet Control Model) mode, it presents itself as a standard Ethernet card (`usb0`). To prevent `ModemManager` from conflicting with the interface or locking the serial ports (which are used by the GPS and status scripts), `ModemManager` is disabled and masked.
+
+To install the LTE and WiFi network failover configuration:
 
 ```bash
-sudo cp deploy/network-connect.default /etc/default/network-connect
-sudo cp deploy/network-connect.service /etc/systemd/system/
-chmod +x deploy/network-connect.sh
-sudo nmcli connection modify lte connection.autoconnect no
-sudo systemctl disable --now sc2-lte.service 2>/dev/null || true
-sudo systemctl daemon-reload
-sudo systemctl enable --now network-connect.service
-```
+# 1. Copy persistent NetworkManager and udev configs
+sudo cp deploy/10-managed-devices.conf /etc/NetworkManager/conf.d/
+sudo cp deploy/99-ignore-lte-net.rules /etc/udev/rules.d/
 
-Saved WiFi profiles (`nmcli connection show`) are tried automatically. LTE uses APN `fast.t-mobile.com` (Tello/T-Mobile) and can be overridden in `/etc/default/network-connect`.
+# 2. Reload and apply rules
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+# 3. Mask and stop ModemManager (prevents interface hijacking & serial locks)
+sudo systemctl mask ModemManager
+sudo systemctl stop ModemManager || true
+
+# 4. Modify connection metrics in NetworkManager
+# This configures WiFi to have priority (metric 100) and LTE to be the fallback (metric 600)
+sudo nmcli connection modify lte connection.autoconnect yes ipv4.route-metric 600 ipv6.route-metric 600
+
+# 5. Restart NetworkManager to apply
+sudo systemctl restart NetworkManager
+```
 
 Verify:
 
 ```bash
-systemctl status network-connect.service
+nmcli dev
 ip route show default
-curl -s -o /dev/null -w "%{http_code}\n" https://us-east-1-1.aws.cloud2.influxdata.com/health
+curl -s -o /dev/null -w "%{http_code}
+" https://us-east-1-1.aws.cloud2.influxdata.com/health
 ```
 
 ### Bring up CAN interface
@@ -175,6 +188,63 @@ Add to `/etc/fstab` for persistence:
 ```
 UUID=<your-uuid>  /mnt/usb  ext4  defaults,noatime  0  2
 ```
+
+---
+
+## Automated Image Building (GitHub Actions)
+
+We have a GitHub Actions pipeline configured in `.github/workflows/build-image.yml` that automatically builds a pre-configured Raspberry Pi OS Lite image and publishes it in the **Releases** tab of your repository.
+
+This image comes out-of-the-box with all packages installed, user accounts configured, CAN interfaces prepared, and LTE failover configurations deployed.
+
+### Configuring Secrets
+Before running the builder, go to **Settings > Secrets and variables > Actions** in your GitHub repository and add:
+- **`PI_USERNAME`** (Optional): Custom username for the OS (defaults to `sunpi`).
+- **`PI_PASSWORD`** (Optional): Custom password for the OS (defaults to `sunpi`).
+
+### Triggering the Build
+1. Go to the **Actions** tab of your repository.
+2. Select the **Build Custom Raspberry Pi Image** workflow.
+3. Click **Run workflow** and select the branch you wish to build.
+4. If building for a release, publishing a new Release on GitHub will automatically trigger the build and attach the `.img.xz` file to the release page.
+
+<details>
+<summary><b>🚨 microSD Card Recovery Guide (Click to Expand)</b></summary>
+
+In case your Raspberry Pi's microSD card becomes corrupted or fails, follow these steps to restore the system to a clean, pre-configured state:
+
+#### 1. Download the Custom OS Image
+* Go to the **Releases** tab of the `can-telem-cloud` repository on GitHub.
+* Locate the latest release from the `main` branch.
+* Download the compressed custom image asset: `driverio-custom-raspios-lite.img.xz`.
+
+#### 2. Flash the Image
+* Insert a new/blank microSD card into your laptop.
+* Open the **Raspberry Pi Imager** software (or BalenaEtcher).
+* For **Operating System**, select **Use Custom** and choose the downloaded `driverio-custom-raspios-lite.img.xz` file.
+* For **Storage**, select your microSD card.
+* Click **Write** and wait for the flashing and verification to complete.
+
+#### 3. Boot the Pi
+* Remove the microSD card from your laptop and insert it into the Raspberry Pi.
+* Connect the CAN hat, LTE modem, and serial radio if they are not already connected.
+* Power on the Raspberry Pi. The initial boot may take an extra minute as the OS automatically expands the filesystem.
+
+#### 4. Log In
+* Connect a monitor and keyboard, or log in via serial console.
+* Log in using the default user credentials mentioned in our **Confluence docs**.
+  * *Note: If a custom username/password was set in your GitHub secrets during the image build, use those custom credentials instead.*
+
+#### 5. Authenticate Tailscale (Required)
+Since Tailscale requires unique hardware node keys, you must manually authenticate the new OS install into your Tailnet:
+* Run the Tailscale login command:
+  ```bash
+  sudo tailscale up
+  ```
+* Copy the login URL printed in the terminal, open it in your browser, and authenticate using your team's Gmail/Tailscale account.
+* Once logged in, the Pi will join your Tailnet, and you can now SSH into it remotely (`ssh <username>@driverio`)!
+
+</details>
 
 ---
 
