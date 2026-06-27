@@ -29,6 +29,8 @@ apt-get install -y \
   python-is-python3 \
   libssl-dev \
   libffi-dev \
+  libcurl4-openssl-dev \
+  libsqlite3-dev \
   dnsmasq
 
 # 2. Install Tailscale
