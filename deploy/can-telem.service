@@ -10,6 +10,7 @@ WorkingDirectory=/home/sunpi/can-telem-cloud
 ExecStart=/home/sunpi/can-telem-cloud/can_telem -c /home/sunpi/can-telem-cloud/can_telem.conf
 Restart=always
 RestartSec=2
+TimeoutStopSec=5
 User=root
 Group=root
 NoNewPrivileges=true
