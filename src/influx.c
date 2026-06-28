@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 static size_t hash_name(const char *s) {
     size_t h = 5381;
@@ -170,6 +171,7 @@ static void influx_flush(influx_ctx_t *ctx) {
         } else {
             if (ctx->slots[i].count == 0) continue;
             double mean = ctx->slots[i].sum / (double)ctx->slots[i].count;
+            if (isnan(mean) || isinf(mean)) continue;
             n = snprintf(line, sizeof line,
                          "%s,signal=%s value=%.9g %" PRId64 "\n",
                          ctx->measurement, esc_name, mean, ts_ns);
