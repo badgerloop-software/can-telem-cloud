@@ -1,0 +1,12 @@
+[Unit]
+Description=RFD900 Radio Reset Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/sunpi/can-telem-cloud/deploy/rfd900_reset.py
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
