@@ -1,0 +1,9 @@
+[Unit]
+Description=Run RFD900 Radio Reset 30 seconds after boot
+
+[Timer]
+OnBootSec=30s
+Unit=rfd900-reset.service
+
+[Install]
+WantedBy=timers.target
