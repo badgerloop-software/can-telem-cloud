@@ -67,6 +67,48 @@ static void maybe_inject_gnss(const signal_table_t *table,
     inject_one_signal(w, influx, radio, cf, elev_sig, elev);
 }
 
+static void maybe_inject_status(writer_t *w,
+                                influx_ctx_t *influx,
+                                serial_radio_ctx_t *radio,
+                                const config_file_t *cf,
+                                const signal_def_t *lte_sig,
+                                const signal_def_t *radio_sig) {
+    static struct timespec last_check = {0};
+    static bool lte_up = false;
+    static bool radio_up = false;
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    // Poll operstate only once every 2 seconds
+    if (last_check.tv_sec == 0 || (now.tv_sec - last_check.tv_sec) >= 2) {
+        last_check = now;
+        
+        // Check LTE status
+        lte_up = false;
+        FILE *f = fopen("/sys/class/net/usb0/operstate", "r");
+        if (f) {
+            char buf[32];
+            if (fgets(buf, sizeof buf, f)) {
+                if (strncmp(buf, "up", 2) == 0) {
+                    lte_up = true;
+                }
+            }
+            fclose(f);
+        }
+        
+        // Check Radio status (initialized and descriptor active)
+        radio_up = (radio && radio->enabled && radio->fd >= 0);
+    }
+    
+    if (lte_sig) {
+        inject_one_signal(w, influx, radio, cf, lte_sig, lte_up ? 1.0 : 0.0);
+    }
+    if (radio_sig) {
+        inject_one_signal(w, influx, radio, cf, radio_sig, radio_up ? 1.0 : 0.0);
+    }
+}
+
 int can_reader_open(const char *ifname) {
     if (!ifname) return -1;
 
@@ -118,6 +160,9 @@ int can_reader_loop(int fd,
     const signal_def_t *lon_sig = find_signal_by_name(table, lon_name);
     const signal_def_t *elev_sig = find_signal_by_name(table, elev_name);
 
+    const signal_def_t *lte_sig = find_signal_by_name(table, "lte_status");
+    const signal_def_t *radio_sig = find_signal_by_name(table, "serial_status");
+
     struct can_frame frame;
     while (*running) {
         int poll_ms = 200;
@@ -130,6 +175,7 @@ int can_reader_loop(int fd,
         }
         if (pr == 0) {
             maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
+            maybe_inject_status(w, influx, radio, cf, lte_sig, radio_sig);
             writer_tick(w);
             if (influx) influx_tick(influx);
             serial_radio_tick(radio);
@@ -171,6 +217,7 @@ int can_reader_loop(int fd,
         }
 
         maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
+        maybe_inject_status(w, influx, radio, cf, lte_sig, radio_sig);
         writer_tick(w);
         if (influx) influx_tick(influx);
         serial_radio_tick(radio);
