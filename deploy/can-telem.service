@@ -1,7 +1,7 @@
 [Unit]
 Description=can-telem-cloud CAN telemetry service
-After=network-connect.service network-online.target ModemManager.service can0.service
-Wants=network-connect.service network-online.target ModemManager.service can0.service can-telem-gnss.service
+After=network-online.target ModemManager.service can0.service
+Wants=network-online.target ModemManager.service can0.service can-telem-gnss.service
 RequiresMountsFor=/mnt/usb
 
 [Service]
