@@ -4,13 +4,45 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag for the built image (defaults to pi-image-YYYYMMDD-runN)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  deployments: write
 
 jobs:
   build-image:
     runs-on: ubuntu-latest
+    environment: pi-images
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.tag_name }}" ]; then
+            tag="${{ inputs.tag_name }}"
+          else
+            tag="pi-image-$(date -u +%Y%m%d)-run${{ github.run_number }}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${tag}"
+
+      - name: Create deployment
+        uses: chrnorm/deployment-action@v2
+        id: deployment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          environment: pi-images
+          ref: ${{ github.sha }}
+          description: Custom Raspberry Pi OS image build
 
       - name: Resolve Latest Raspberry Pi OS URL
         id: resolve-url
@@ -39,10 +71,39 @@ jobs:
           mv rpi-os-modified.img driverio-custom-raspios-lite.img
           xz -9 driverio-custom-raspios-lite.img
 
-      - name: Upload Image to GitHub Release
-        if: github.event_name == 'release'
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: driverio-custom-raspios-lite-${{ steps.release.outputs.tag }}
+          path: driverio-custom-raspios-lite.img.xz
+          retention-days: 90
+
+      - name: Upload image to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: Raspberry Pi Image ${{ steps.release.outputs.tag }}
           files: driverio-custom-raspios-lite.img.xz
+          generate_release_notes: ${{ github.event_name == 'workflow_dispatch' }}
+          make_latest: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mark deployment success
+        uses: chrnorm/deployment-status@v2
+        if: success()
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+          state: success
+          environment-url: https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag }}
+          description: Published driverio-custom-raspios-lite.img.xz
+
+      - name: Mark deployment failure
+        uses: chrnorm/deployment-status@v2
+        if: failure() && steps.deployment.outputs.deployment_id != ''
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+          state: failure
+          description: Image build or release upload failed
