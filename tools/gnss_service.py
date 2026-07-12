@@ -8,7 +8,7 @@ from pathlib import Path
 
 OUT_PATH = Path("/run/can_telem/gnss.json")
 OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-PORT = '/dev/ttyUSB2'
+PORT = '/dev/ttyUSB3'  # ttyUSB2 is claimed by ModemManager for LTE; ttyUSB3 is the free AT port
 BAUD = 115200
 
 def log(msg):
