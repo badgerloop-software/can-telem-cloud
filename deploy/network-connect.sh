@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
+# network-connect.sh
+# Boot-time connectivity: prefer LTE, fall back to WiFi.
+# After this script exits, WiFi remains joinable manually (keyboard/display)
+# but will NOT override the LTE default route — it just adds a secondary route.
 set -euo pipefail
 
 CONFIG_FILE=/etc/default/network-connect
-WIFI_WAIT_SEC=45
-LTE_WAIT_SEC=60
+LTE_WAIT_SEC=90       # seconds to wait for LTE internet after bearer connects
+MODEM_REG_WAIT=45     # seconds to wait for cell registration
 PING_TARGET=1.1.1.1
 LTE_CONN_NAME=lte
 LTE_APN=fast.t-mobile.com
-WIFI_METRIC=100
-LTE_METRIC=600
+LTE_METRIC=100        # lower = preferred (LTE wins)
+WIFI_METRIC=600       # higher = secondary (WiFi stays reachable, not default)
 
 if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -48,16 +52,10 @@ get_lte_gateway() {
         echo "$gw"
         return 0
     fi
+    # Derive gateway from usb0 IP (RNDIS modems use X.X.X.1)
     if lte_usb_up; then
         ip -4 -o addr show dev usb0 | awk '{split($4,a,"/"); split(a[1],b,"."); printf "%s.%s.%s.1\n", b[1], b[2], b[3]}'
     fi
-}
-
-wifi_has_internet() {
-    if ! nmcli -t -f DEVICE,STATE device status | awk -F: '$1=="wlan0" && $2=="connected" { found=1 } END { exit !found }'; then
-        return 1
-    fi
-    ping -I wlan0 -c1 -W3 "$PING_TARGET" >/dev/null 2>&1
 }
 
 lte_has_internet() {
@@ -65,19 +63,17 @@ lte_has_internet() {
     ping -I usb0 -c1 -W3 "$PING_TARGET" >/dev/null 2>&1
 }
 
-ensure_lte_default_route() {
-    local lte_gw
-    lte_gw=$(get_lte_gateway)
-    [[ -n "$lte_gw" ]] || return 1
-    ip route replace default via "$lte_gw" dev usb0 metric "$WIFI_METRIC" 2>/dev/null || true
-    return 0
+wifi_has_internet() {
+    nmcli -t -f DEVICE,STATE device status | awk -F: '$1=="wlan0" && $2=="connected" { found=1 } END { exit !found }' || return 1
+    ping -I wlan0 -c1 -W3 "$PING_TARGET" >/dev/null 2>&1
 }
 
+# Set persistent NM connection metrics so that auto-reconnects honour priority
 set_route_metrics() {
-    local prefer_wifi=$1
+    local prefer_lte=$1  # "1" = LTE wins, "0" = WiFi wins
     local wifi_metric lte_metric
 
-    if [[ "$prefer_wifi" == "1" ]]; then
+    if [[ "$prefer_lte" == "1" ]]; then
         wifi_metric=$WIFI_METRIC
         lte_metric=$LTE_METRIC
     else
@@ -85,66 +81,61 @@ set_route_metrics() {
         lte_metric=$WIFI_METRIC
     fi
 
+    # Stamp every saved WiFi profile
     while IFS=: read -r name type _; do
         [[ "$type" == "802-11-wireless" ]] || continue
-        nmcli connection modify "$name" ipv4.route-metric "$wifi_metric" ipv6.route-metric "$wifi_metric" 2>/dev/null || true
+        nmcli connection modify "$name" \
+            ipv4.route-metric "$wifi_metric" \
+            ipv6.route-metric "$wifi_metric" 2>/dev/null || true
     done < <(nmcli -t -f NAME,TYPE connection show)
 
+    # Stamp the LTE connection profile if it exists
     if nmcli -t -f NAME connection show | grep -qx "$LTE_CONN_NAME"; then
-        nmcli connection modify "$LTE_CONN_NAME" ipv4.route-metric "$lte_metric" ipv6.route-metric "$lte_metric" 2>/dev/null || true
+        nmcli connection modify "$LTE_CONN_NAME" \
+            ipv4.route-metric "$lte_metric" \
+            ipv6.route-metric "$lte_metric" 2>/dev/null || true
     fi
 }
 
-apply_default_route() {
-    local prefer_wifi=$1
-    local wifi_gw lte_gw
-
-    wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
+# Explicitly install a default route via LTE with the correct metric
+install_lte_default_route() {
+    local lte_gw
     lte_gw=$(get_lte_gateway)
-
-    if [[ "$prefer_wifi" == "1" && -n "$wifi_gw" ]]; then
-        ip route replace default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC"
-        if [[ -n "$lte_gw" ]]; then
-            ip route del default via "$lte_gw" dev usb0 metric "$LTE_METRIC" 2>/dev/null || true
-            ip route del default dev usb0 2>/dev/null || true
-        fi
-        return 0
+    [[ -n "$lte_gw" ]] || return 1
+    ip route replace default via "$lte_gw" dev usb0 metric "$LTE_METRIC" 2>/dev/null || true
+    # Push any existing WiFi default route to the secondary metric
+    local wifi_gw
+    wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
+    if [[ -n "$wifi_gw" ]]; then
+        ip route replace default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC" 2>/dev/null || true
     fi
-
-    if [[ -n "$lte_gw" ]]; then
-        ip route replace default via "$lte_gw" dev usb0 metric "$WIFI_METRIC"
-        if [[ -n "$wifi_gw" ]]; then
-            ip route replace default via "$wifi_gw" dev wlan0 metric "$LTE_METRIC" 2>/dev/null || true
-        fi
-        return 0
-    fi
-
-    return 1
+    return 0
 }
 
-try_wifi() {
-    local i profile active_wifi
-    local -a profiles=()
+# Install a default route via WiFi (fallback only — LTE not available)
+install_wifi_default_route() {
+    local wifi_gw
+    wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
+    [[ -n "$wifi_gw" ]] || return 1
+    ip route replace default via "$wifi_gw" dev wlan0 metric "$LTE_METRIC" 2>/dev/null || true
+    return 0
+}
 
+# Allow WiFi radio + all saved autoconnect profiles to stay available.
+# We do NOT block on them — this just ensures NM keeps scanning so the user
+# can connect manually via keyboard/display at any time.
+keep_wifi_available() {
     nmcli radio wifi on 2>/dev/null || true
     nmcli device set wlan0 managed yes 2>/dev/null || true
+}
 
-    mapfile -t profiles < <(
-        nmcli -t -f NAME,TYPE,AUTOCONNECT connection show |
-            awk -F: '$2=="802-11-wireless" && $3=="yes" { print $1 }'
-    )
-
-    for i in $(seq 1 "$WIFI_WAIT_SEC"); do
-        if wifi_has_internet; then
+wait_for_modem() {
+    # ModemManager takes a few seconds after boot to enumerate the EC25.
+    # Poll up to 20s before giving up so we don't race past it at cold start.
+    local i
+    for i in $(seq 1 20); do
+        if get_modem_index >/dev/null 2>&1 && [[ -n "$(get_modem_index)" ]]; then
             return 0
-        fi
-
-        if [[ "$i" -le 10 ]]; then
-            for profile in "${profiles[@]}"; do
-                if nmcli connection up "$profile" ifname wlan0 2>/dev/null; then
-                    break
-                fi
-            done
         fi
         sleep 1
     done
@@ -154,41 +145,87 @@ try_wifi() {
 connect_lte() {
     local modem state i
 
-    modem=$(get_modem_index)
-    if [[ -z "$modem" ]]; then
-        log "No LTE modem found"
+    log "Waiting up to 20s for modem to enumerate..."
+    if ! wait_for_modem; then
+        log "No LTE modem found via mmcli after 20s"
         return 1
     fi
 
+    modem=$(get_modem_index)
+
+    # Enable modem if it is disabled
     state=$(mmcli -m "$modem" 2>/dev/null | awk -F': ' '/^[[:space:]]*state:/{print $2; exit}')
     if [[ "$state" == "disabled" ]]; then
         log "Enabling modem $modem"
         mmcli -m "$modem" --enable 2>/dev/null || true
-        sleep 2
+        sleep 3
     fi
 
+    # Wait for network registration (SIM must find a cell tower)
     if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
-        log "Waiting for modem registration"
-        for i in $(seq 1 30); do
+        log "Waiting up to ${MODEM_REG_WAIT}s for cell registration..."
+        for i in $(seq 1 "$MODEM_REG_WAIT"); do
             if mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
+                log "Modem registered after ${i}s"
                 break
             fi
             sleep 1
         done
     fi
 
+    # Verify registration succeeded
+    if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
+        log "Modem failed to register on network (no signal / SIM issue)"
+        return 1
+    fi
+
+    # Bring up the data bearer if not already connected
     if ! mmcli -m "$modem" -b 0 2>/dev/null | grep -q 'connected: yes'; then
         log "Connecting LTE bearer (apn=$LTE_APN)"
         mmcli -m "$modem" --simple-connect="apn=${LTE_APN},ip-type=ipv4v6" 2>/dev/null ||
             mmcli -m "$modem" --simple-connect="apn=${LTE_APN}" 2>/dev/null || true
     fi
 
+    # Wait for usb0 to come up and ping out
     for i in $(seq 1 "$LTE_WAIT_SEC"); do
         if lte_usb_up; then
-            ensure_lte_default_route || true
+            install_lte_default_route || true
         fi
         if lte_has_internet; then
+            log "LTE internet confirmed after ${i}s"
             return 0
+        fi
+        sleep 1
+    done
+
+    log "LTE bearer connected but could not reach internet (check APN / antenna)"
+    return 1
+}
+
+try_wifi_fallback() {
+    local i profile
+    local -a profiles=()
+
+    mapfile -t profiles < <(
+        nmcli -t -f NAME,TYPE,AUTOCONNECT connection show |
+            awk -F: '$2=="802-11-wireless" && $3=="yes" { print $1 }'
+    )
+
+    if [[ ${#profiles[@]} -eq 0 ]]; then
+        log "No saved WiFi profiles — skipping WiFi fallback"
+        return 1
+    fi
+
+    log "Attempting WiFi fallback (saved profiles: ${profiles[*]})"
+
+    for i in $(seq 1 30); do
+        if wifi_has_internet; then
+            return 0
+        fi
+        if [[ "$i" -le 10 ]]; then
+            for profile in "${profiles[@]}"; do
+                nmcli connection up "$profile" ifname wlan0 2>/dev/null && break || true
+            done
         fi
         sleep 1
     done
@@ -196,34 +233,39 @@ connect_lte() {
 }
 
 main() {
-    log "starting connectivity selection"
+    log "starting — LTE-first connectivity selection"
 
     if ! wait_for_nm; then
-        log "NetworkManager not ready"
+        log "NetworkManager not ready after 30s"
         exit 1
     fi
 
-    if try_wifi; then
-        log "using saved WiFi network"
-        set_route_metrics 1
-        active_wifi=$(nmcli -t -f NAME,TYPE connection show --active | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-        if [[ -n "${active_wifi:-}" ]]; then
-            nmcli connection up "$active_wifi" 2>/dev/null || true
-        fi
-        apply_default_route 1 || true
-        exit 0
-    fi
+    # Always keep WiFi radio alive so the user can connect manually later
+    keep_wifi_available
 
-    log "no saved WiFi available, connecting LTE"
+    # ── Primary path: LTE ────────────────────────────────────────────────────
     if connect_lte; then
-        log "using LTE"
-        set_route_metrics 0
-        apply_default_route 0 || true
+        log "using LTE as primary internet connection"
+        set_route_metrics 1          # stamp NM profiles: LTE=100, WiFi=600
+        install_lte_default_route || true
         exit 0
     fi
 
-    log "failed to establish internet connectivity"
-    exit 1
+    # ── Fallback path: WiFi ──────────────────────────────────────────────────
+    # LTE is unavailable (no signal, SIM issue, etc.) — try saved WiFi.
+    log "LTE unavailable — trying WiFi fallback"
+    if try_wifi_fallback; then
+        log "using WiFi as fallback internet connection (LTE not available)"
+        set_route_metrics 0          # stamp NM profiles: WiFi=100, LTE=600
+        install_wifi_default_route || true
+        exit 0
+    fi
+
+    # ── No internet at all ───────────────────────────────────────────────────
+    log "WARNING: no internet connectivity established at boot"
+    log "Telemetry will queue locally. Connect WiFi manually if needed."
+    # Exit 0 so the service is not marked failed (telemetry still logs to USB)
+    exit 0
 }
 
 main "$@"

@@ -68,12 +68,21 @@ echo "==> Setting up systemd services..."
 cp deploy/can0.service /etc/systemd/system/
 cp deploy/can-telem.service /etc/systemd/system/
 cp deploy/can-telem-gnss.service /etc/systemd/system/
+cp deploy/network-connect.service /etc/systemd/system/
+cp deploy/network-connect.default /etc/default/network-connect
+cp deploy/rfd900-reset.service /etc/systemd/system/
+cp deploy/rfd900-reset.timer /etc/systemd/system/
+cp deploy/rtc-sync.service /etc/systemd/system/
+cp deploy/rtc-sync-shutdown.service /etc/systemd/system/
+cp deploy/rtc-sync.timer /etc/systemd/system/
 
 # Adjust systemd service paths if a non-default username was specified
 if [[ "${USER_NAME}" != "sunpi" ]]; then
   echo "==> Adjusting service paths to use /home/${USER_NAME} instead of /home/sunpi..."
   sed -i "s|/home/sunpi|/home/${USER_NAME}|g" /etc/systemd/system/can-telem.service
   sed -i "s|/home/sunpi|/home/${USER_NAME}|g" /etc/systemd/system/can-telem-gnss.service
+  sed -i "s|/home/sunpi|/home/${USER_NAME}|g" /etc/systemd/system/network-connect.service
+  sed -i "s|/home/sunpi|/home/${USER_NAME}|g" /etc/systemd/system/rfd900-reset.service
 fi
 
 # 6. Deploy network failover rules
@@ -81,11 +90,16 @@ echo "==> Setting up LTE failover rules..."
 cp deploy/10-managed-devices.conf /etc/NetworkManager/conf.d/
 cp deploy/99-ignore-lte-net.rules /etc/udev/rules.d/
 
-# 7. Mask ModemManager & Enable Services
-systemctl mask ModemManager
+# 7. Unmask & Enable Services
+systemctl unmask ModemManager
+systemctl enable ModemManager
 systemctl enable can0.service
 systemctl enable can-telem.service
 systemctl enable can-telem-gnss.service
+systemctl enable network-connect.service
+systemctl enable rfd900-reset.timer
+systemctl enable rtc-sync.timer
+systemctl enable rtc-sync-shutdown.service
 systemctl enable tailscaled.service
 
 echo "==> Configuration complete!"
