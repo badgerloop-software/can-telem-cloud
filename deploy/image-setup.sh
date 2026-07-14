@@ -9,6 +9,15 @@ USER_NAME="${PI_USERNAME:-sunpi}"
 
 echo "==> Configuring base operating system..."
 
+echo "==> Configuring display for 7-inch screen (rotation & large font)..."
+# Set terminal font to 16x32 Terminus for readability
+sed -i 's/^FONTFACE=.*/FONTFACE="Terminus"/' /etc/default/console-setup
+sed -i 's/^FONTSIZE=.*/FONTSIZE="16x32"/' /etc/default/console-setup
+# Flip screen 180 degrees via framebuffer rotation
+if [ -f /boot/firmware/cmdline.txt ]; then
+  sed -i 's/$/ fbcon=rotate:2/' /boot/firmware/cmdline.txt
+fi
+
 # 1. Update package lists and install required dependencies
 apt-get update
 apt-get install -y \

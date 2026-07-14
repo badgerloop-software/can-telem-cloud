@@ -248,7 +248,11 @@ Since Tailscale requires unique hardware node keys, you must manually authentica
 
 ---
 
-## Building
+**Table of Contents:**
+1. [Setup and Configuration](docs/pi-setup.md)
+2. Build instructions
+
+## Build instructions
 
 ```bash
 sudo apt install libcurl4-openssl-dev libsqlite3-dev
