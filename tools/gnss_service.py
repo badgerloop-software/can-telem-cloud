@@ -50,20 +50,43 @@ def parse_qgpsloc_line(line):
     
     return lat, lon, elev
 
-def write_fix(lat, lon, elev):
+def parse_csq(response):
+    """Parse AT+CSQ response. Returns (rssi_raw, rssi_dbm) or (None, None).
+    rssi_raw: 0-31 (99 = not known/detectable)
+    rssi_dbm: -113 + 2*rssi_raw  (standard mapping per 3GPP TS 27.007)
+    """
+    m = re.search(r'\+CSQ:\s*(\d+),', response)
+    if not m:
+        return None, None
+    rssi_raw = int(m.group(1))
+    if rssi_raw == 99:
+        return 99, None  # unknown
+    rssi_dbm = -113 + 2 * rssi_raw
+    return rssi_raw, rssi_dbm
+
+
+def write_fix(lat, lon, elev, rssi_raw=None, rssi_dbm=None):
     payload = {
         "lat": lat,
         "lon": lon,
         "elev": elev,
         "timestamp_ns": time.time_ns(),
     }
+    if rssi_raw is not None:
+        payload["rssi_raw"] = rssi_raw
+    if rssi_dbm is not None:
+        payload["rssi_dbm"] = rssi_dbm
     tmp = OUT_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp, OUT_PATH)
 
 def main():
     log("Starting AT-based GNSS service...")
-    
+
+    # Cached signal strength (updated every loop; persists even without a GPS fix)
+    last_rssi_raw = None
+    last_rssi_dbm = None
+
     # Try to open serial port
     ser = None
     while True:
@@ -80,12 +103,21 @@ def main():
                     ser.write(b"AT+QGPS=1\r\n")
                     time.sleep(0.5)
                     log(ser.read_all().decode(errors='ignore').strip())
-                    
+
+            # --- Query LTE signal strength (AT+CSQ) ---
+            ser.write(b"AT+CSQ\r\n")
+            time.sleep(0.2)
+            csq_resp = ser.read_all().decode(errors='ignore')
+            rssi_raw, rssi_dbm = parse_csq(csq_resp)
+            if rssi_raw is not None:
+                last_rssi_raw = rssi_raw
+                last_rssi_dbm = rssi_dbm
+
             # Poll location
             ser.write(b"AT+QGPSLOC=0\r\n")
             time.sleep(0.5)
             resp = ser.read_all().decode(errors='ignore')
-            
+
             if "+QGPSLOC:" in resp:
                 # Parse lines
                 for line in resp.splitlines():
@@ -93,12 +125,25 @@ def main():
                         parsed = parse_qgpsloc_line(line)
                         if parsed:
                             lat, lon, elev = parsed
-                            write_fix(lat, lon, elev)
+                            write_fix(lat, lon, elev, last_rssi_raw, last_rssi_dbm)
                             # Optional logging
-                            # log(f"Fix updated: {lat}, {lon}, {elev}")
+                            # log(f"Fix updated: {lat}, {lon}, {elev}, rssi={last_rssi_dbm} dBm")
             elif "+CME ERROR: 516" in resp:
                 # GPS is active, searching for fix (Not fixed now)
-                pass
+                # Still update the cache with signal strength if we have a previous fix
+                if OUT_PATH.exists():
+                    try:
+                        import json as _json
+                        data = _json.loads(OUT_PATH.read_text(encoding='utf-8'))
+                        if last_rssi_raw is not None:
+                            data['rssi_raw'] = last_rssi_raw
+                        if last_rssi_dbm is not None:
+                            data['rssi_dbm'] = last_rssi_dbm
+                        tmp = OUT_PATH.with_suffix(".tmp")
+                        tmp.write_text(_json.dumps(data), encoding='utf-8')
+                        os.replace(tmp, OUT_PATH)
+                    except Exception:
+                        pass
             elif "+CME ERROR: 502" in resp or "ERROR" in resp:
                 # Check if GPS was disabled
                 ser.write(b"AT+QGPS?\r\n")
@@ -109,7 +154,7 @@ def main():
                     ser.write(b"AT+QGPS=1\r\n")
                     time.sleep(0.5)
                     ser.read_all()
-                    
+
             time.sleep(1.0)
         except Exception as e:
             log(f"Error in main loop: {e}")

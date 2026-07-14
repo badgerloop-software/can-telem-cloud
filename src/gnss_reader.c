@@ -105,6 +105,14 @@ int gnss_reader_tick(gnss_reader_t *ctx) {
     int have_lat = (json_get_num(root, "lat", "latitude", &lat) == 0);
     int have_lon = (json_get_num(root, "lon", "longitude", &lon) == 0);
     (void)json_get_num(root, "elev", "altitude", &elev);
+
+    /* signal strength — optional, gracefully absent when module hasn't polled yet */
+    double rssi_dbm = 0.0;
+    if (json_get_num(root, "rssi_dbm", NULL, &rssi_dbm) == 0) {
+        ctx->rssi_dbm  = rssi_dbm;
+        ctx->have_rssi = true;
+    }
+
     cJSON_Delete(root);
 
     if (!have_lat || !have_lon) return 0;
@@ -123,6 +131,12 @@ int gnss_reader_get_fix(const gnss_reader_t *ctx, double *lat, double *lon, doub
     if (lat) *lat = ctx->lat;
     if (lon) *lon = ctx->lon;
     if (elev) *elev = ctx->elev;
+    return 1;
+}
+
+int gnss_reader_get_rssi(const gnss_reader_t *ctx, double *rssi_dbm) {
+    if (!ctx || !ctx->enabled || !ctx->have_rssi) return 0;
+    if (rssi_dbm) *rssi_dbm = ctx->rssi_dbm;
     return 1;
 }
 

@@ -54,17 +54,23 @@ static void maybe_inject_gnss(const signal_table_t *table,
                               const config_file_t *cf,
                               const signal_def_t *lat_sig,
                               const signal_def_t *lon_sig,
-                              const signal_def_t *elev_sig) {
+                              const signal_def_t *elev_sig,
+                              const signal_def_t *rssi_sig) {
     (void)table;
     if (!gnss || !gnss->enabled) return;
     (void)gnss_reader_tick(gnss);
 
     double lat = 0.0, lon = 0.0, elev = 0.0;
-    if (!gnss_reader_get_fix(gnss, &lat, &lon, &elev)) return;
+    if (gnss_reader_get_fix(gnss, &lat, &lon, &elev)) {
+        inject_one_signal(w, influx, radio, cf, lat_sig, lat);
+        inject_one_signal(w, influx, radio, cf, lon_sig, lon);
+        inject_one_signal(w, influx, radio, cf, elev_sig, elev);
+    }
 
-    inject_one_signal(w, influx, radio, cf, lat_sig, lat);
-    inject_one_signal(w, influx, radio, cf, lon_sig, lon);
-    inject_one_signal(w, influx, radio, cf, elev_sig, elev);
+    double rssi_dbm = 0.0;
+    if (rssi_sig && gnss_reader_get_rssi(gnss, &rssi_dbm)) {
+        inject_one_signal(w, influx, radio, cf, rssi_sig, rssi_dbm);
+    }
 }
 
 static void maybe_inject_status(writer_t *w,
@@ -162,6 +168,7 @@ int can_reader_loop(int fd,
 
     const signal_def_t *lte_sig = find_signal_by_name(table, "lte_status");
     const signal_def_t *radio_sig = find_signal_by_name(table, "serial_status");
+    const signal_def_t *rssi_sig = find_signal_by_name(table, "lte_signal_strength");
 
     struct can_frame frame;
     while (*running) {
@@ -174,7 +181,7 @@ int can_reader_loop(int fd,
             return -1;
         }
         if (pr == 0) {
-            maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
+            maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig, rssi_sig);
             maybe_inject_status(w, influx, radio, cf, lte_sig, radio_sig);
             writer_tick(w);
             if (influx) influx_tick(influx);
@@ -216,7 +223,7 @@ int can_reader_loop(int fd,
             serial_radio_accumulate(radio, &node->sig, &dv);
         }
 
-        maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig);
+        maybe_inject_gnss(table, w, influx, radio, gnss, cf, lat_sig, lon_sig, elev_sig, rssi_sig);
         maybe_inject_status(w, influx, radio, cf, lte_sig, radio_sig);
         writer_tick(w);
         if (influx) influx_tick(influx);
