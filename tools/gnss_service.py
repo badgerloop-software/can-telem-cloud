@@ -130,20 +130,29 @@ def main():
                             # log(f"Fix updated: {lat}, {lon}, {elev}, rssi={last_rssi_dbm} dBm")
             elif "+CME ERROR: 516" in resp:
                 # GPS is active, searching for fix (Not fixed now)
-                # Still update the cache with signal strength if we have a previous fix
-                if OUT_PATH.exists():
-                    try:
-                        import json as _json
-                        data = _json.loads(OUT_PATH.read_text(encoding='utf-8'))
-                        if last_rssi_raw is not None:
-                            data['rssi_raw'] = last_rssi_raw
-                        if last_rssi_dbm is not None:
-                            data['rssi_dbm'] = last_rssi_dbm
-                        tmp = OUT_PATH.with_suffix(".tmp")
-                        tmp.write_text(_json.dumps(data), encoding='utf-8')
-                        os.replace(tmp, OUT_PATH)
-                    except Exception:
-                        pass
+                # Still update or create the cache with signal strength
+                try:
+                    import json as _json
+                    data = {}
+                    if OUT_PATH.exists():
+                        try:
+                            data = _json.loads(OUT_PATH.read_text(encoding='utf-8'))
+                        except Exception:
+                            pass
+                    if last_rssi_raw is not None:
+                        data['rssi_raw'] = last_rssi_raw
+                    if last_rssi_dbm is not None:
+                        data['rssi_dbm'] = last_rssi_dbm
+                    
+                    # Ensure timestamp exists so C code knows it's fresh
+                    if 'timestamp_ns' not in data:
+                        data['timestamp_ns'] = time.time_ns()
+
+                    tmp = OUT_PATH.with_suffix(".tmp")
+                    tmp.write_text(_json.dumps(data), encoding='utf-8')
+                    os.replace(tmp, OUT_PATH)
+                except Exception:
+                    pass
             elif "+CME ERROR: 502" in resp or "ERROR" in resp:
                 # Check if GPS was disabled
                 ser.write(b"AT+QGPS?\r\n")
