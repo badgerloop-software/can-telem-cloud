@@ -10,6 +10,12 @@ fi
 
 echo "Deploying system services and network configurations..."
 
+# LTE scripts need ModemManager (mmcli) and GNSS/radio scripts need pyserial.
+if ! dpkg -s modemmanager &>/dev/null || ! dpkg -s python3-serial &>/dev/null; then
+  apt-get update
+  apt-get install -y modemmanager python3-serial
+fi
+
 # 1. Copy services, timers, and default configurations
 cp deploy/can0.service /etc/systemd/system/
 cp deploy/can-telem.service /etc/systemd/system/

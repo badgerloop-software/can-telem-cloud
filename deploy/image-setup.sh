@@ -35,12 +35,15 @@ apt-get install -y \
   python3-venv \
   python3-pip \
   python3-setuptools \
+  python3-serial \
   python-is-python3 \
   libssl-dev \
   libffi-dev \
   libcurl4-openssl-dev \
   libsqlite3-dev \
-  dnsmasq
+  dnsmasq \
+  network-manager \
+  modemmanager
 
 # 2. Install Tailscale
 echo "==> Installing Tailscale (requires manual 'sudo tailscale up' on first boot)..."
