@@ -179,12 +179,15 @@ connect_lte() {
         return 1
     fi
 
-    # Bring up the data bearer if not already connected
-    if ! mmcli -m "$modem" -b 0 2>/dev/null | grep -q 'connected: yes'; then
-        log "Connecting LTE bearer (apn=$LTE_APN)"
-        mmcli -m "$modem" --simple-connect="apn=${LTE_APN},ip-type=ipv4v6" 2>/dev/null ||
-            mmcli -m "$modem" --simple-connect="apn=${LTE_APN}" 2>/dev/null || true
-    fi
+    # Always force-disconnect existing bearers and reconnect with the correct APN.
+    # The modem's built-in default-attach bearer (fast.t-mobile.com) will block
+    # the correct Tello APN (wholesale) from working if left active.
+    log "Disconnecting any existing bearers..."
+    mmcli -m "$modem" --simple-disconnect 2>/dev/null || true
+    sleep 2
+    log "Connecting LTE bearer (apn=$LTE_APN)"
+    mmcli -m "$modem" --simple-connect="apn=${LTE_APN},ip-type=ipv4v6" 2>/dev/null ||
+        mmcli -m "$modem" --simple-connect="apn=${LTE_APN}" 2>/dev/null || true
 
     # Request IP address on usb0 manually since NetworkManager treats it as unmanaged
     # Prevent dhclient from asynchronously adding a default route (which overrides wlan0)
