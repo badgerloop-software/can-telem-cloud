@@ -187,9 +187,18 @@ connect_lte() {
     fi
 
     # Request IP address on usb0 manually since NetworkManager treats it as unmanaged
+    # Save WiFi gateway so dhclient doesn't permanently destroy it
+    local wifi_gw
+    wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
+
     log "Requesting IP on usb0 via dhclient..."
     dhclient -v usb0 || true
     ip route del default dev usb0 2>/dev/null || true
+
+    # Restore WiFi route if we had one
+    if [[ -n "$wifi_gw" ]]; then
+        ip route add default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC" 2>/dev/null || true
+    fi
 
     # Wait for usb0 to come up and ping out
     for i in $(seq 1 "$LTE_WAIT_SEC"); do
