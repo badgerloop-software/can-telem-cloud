@@ -200,19 +200,30 @@ connect_lte() {
         ip route add default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC" 2>/dev/null || true
     fi
 
-    # Wait for usb0 to come up and ping out
+    # Wait for usb0 to come up and test internet safely
+    local test_gw
     for i in $(seq 1 "$LTE_WAIT_SEC"); do
         if lte_usb_up; then
-            install_lte_default_route || true
-        fi
-        if lte_has_internet; then
-            log "LTE internet confirmed after ${i}s"
-            return 0
+            test_gw=$(get_lte_gateway)
+            if [[ -n "$test_gw" ]]; then
+                # Add a temporary specific route for the ping target so we don't break Tailscale/WiFi
+                ip route add "$PING_TARGET" via "$test_gw" dev usb0 2>/dev/null || true
+                
+                if lte_has_internet; then
+                    log "LTE internet confirmed after ${i}s"
+                    ip route del "$PING_TARGET" via "$test_gw" dev usb0 2>/dev/null || true
+                    install_lte_default_route || true
+                    return 0
+                fi
+                ip route del "$PING_TARGET" via "$test_gw" dev usb0 2>/dev/null || true
+            fi
         fi
         sleep 1
     done
 
     log "LTE bearer connected but could not reach internet (check APN / antenna)"
+    # Ensure any bad default route is wiped out so it doesn't break WiFi
+    ip route del default dev usb0 2>/dev/null || true
     return 1
 }
 
