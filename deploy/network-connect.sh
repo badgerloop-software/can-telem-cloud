@@ -189,6 +189,7 @@ connect_lte() {
     # Request IP address on usb0 manually since NetworkManager treats it as unmanaged
     log "Requesting IP on usb0 via dhclient..."
     dhclient -v usb0 || true
+    ip route del default dev usb0 2>/dev/null || true
 
     # Wait for usb0 to come up and ping out
     for i in $(seq 1 "$LTE_WAIT_SEC"); do
