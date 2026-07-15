@@ -190,6 +190,9 @@ connect_lte() {
     log "Connecting LTE bearer (apn=$LTE_APN)"
     mmcli -m "$modem" --simple-connect="apn=${LTE_APN},ip-type=ipv4v6" 2>/dev/null ||
         mmcli -m "$modem" --simple-connect="apn=${LTE_APN}" 2>/dev/null || true
+    # Wait for the modem's data path to fully initialize after bearer connect
+    log "Waiting 10s for LTE data path to initialize..."
+    sleep 10
 
     # Request IP address on usb0 manually since NetworkManager treats it as unmanaged
     # Prevent dhclient from asynchronously adding a default route (which overrides wlan0)
