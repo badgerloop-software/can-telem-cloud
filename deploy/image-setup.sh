@@ -43,7 +43,8 @@ apt-get install -y \
   libsqlite3-dev \
   dnsmasq \
   network-manager \
-  modemmanager
+  modemmanager \
+  isc-dhcp-client
 
 # 2. Install Tailscale
 echo "==> Installing Tailscale (requires manual 'sudo tailscale up' on first boot)..."
