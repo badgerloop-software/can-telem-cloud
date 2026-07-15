@@ -164,10 +164,10 @@ connect_lte() {
     fi
 
     # Wait for network registration (SIM must find a cell tower)
-    if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
+    if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state:[[:space:]]+(connected|registered)'; then
         log "Waiting up to ${MODEM_REG_WAIT}s for cell registration..."
         for i in $(seq 1 "$MODEM_REG_WAIT"); do
-            if mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
+            if mmcli -m "$modem" 2>/dev/null | grep -qE 'state:[[:space:]]+(connected|registered)'; then
                 log "Modem registered after ${i}s"
                 break
             fi
