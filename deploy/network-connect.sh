@@ -40,7 +40,9 @@ get_modem_index() {
 
 lte_usb_up() {
     ip link show usb0 >/dev/null 2>&1 || return 1
-    ip link show usb0 | grep -q 'state UP' || return 1
+    # RNDIS/CDC-Ethernet modems (e.g. EG25) report 'state UNKNOWN' not 'state UP'.
+    # Check for LOWER_UP flag instead, which means the link is physically active.
+    ip link show usb0 | grep -q 'LOWER_UP' || return 1
     ip -4 addr show dev usb0 2>/dev/null | grep -q 'inet ' || return 1
     return 0
 }
