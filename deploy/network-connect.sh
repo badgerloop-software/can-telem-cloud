@@ -176,7 +176,7 @@ connect_lte() {
     fi
 
     # Verify registration succeeded
-    if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state: (connected|registered)'; then
+    if ! mmcli -m "$modem" 2>/dev/null | grep -qE 'state:.*(connected|registered)'; then
         log "Modem failed to register on network (no signal / SIM issue)"
         return 1
     fi
