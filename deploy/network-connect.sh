@@ -187,18 +187,12 @@ connect_lte() {
     fi
 
     # Request IP address on usb0 manually since NetworkManager treats it as unmanaged
-    # Save WiFi gateway so dhclient doesn't permanently destroy it
-    local wifi_gw
-    wifi_gw=$(ip -4 route show dev wlan0 2>/dev/null | awk '/^default / { print $3; exit }')
+    # Prevent dhclient from asynchronously adding a default route (which overrides wlan0)
+    local dhclient_conf="/tmp/dhclient-usb0.conf"
+    echo "request subnet-mask, broadcast-address, time-offset, domain-name, domain-name-servers, host-name;" > "$dhclient_conf"
 
     log "Requesting IP on usb0 via dhclient..."
-    dhclient -v usb0 || true
-    ip route del default dev usb0 2>/dev/null || true
-
-    # Restore WiFi route if we had one
-    if [[ -n "$wifi_gw" ]]; then
-        ip route add default via "$wifi_gw" dev wlan0 metric "$WIFI_METRIC" 2>/dev/null || true
-    fi
+    dhclient -v -cf "$dhclient_conf" usb0 || true
 
     # Wait for usb0 to come up and test internet safely
     local test_gw
